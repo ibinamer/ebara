@@ -764,13 +764,18 @@ function extractArabicTerms(translationBody: string): string[] {
   const candidates: string[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
-    const match = /^\*\s*Arabic\s*:\s*(.*)$/iu.exec(lines[index] ?? "");
+    // `multitrans` rows on large translation subpages are prefixed with a
+    // MediaWiki definition-list colon (for example `:* Arabic:`), while older
+    // tables use `* Arabic:` directly. Both represent the same language row.
+    const match = /^[:#]*\*\s*Arabic\s*:\s*(.*)$/iu.exec(
+      lines[index] ?? "",
+    );
     if (!match) continue;
 
     let arabicBlock = match[1] ?? "";
     for (let nestedIndex = index + 1; nestedIndex < lines.length; nestedIndex += 1) {
       const nested = lines[nestedIndex] ?? "";
-      if (!/^\*[:*]/u.test(nested)) break;
+      if (!/^[:#]*\*[:*]/u.test(nested)) break;
       arabicBlock += `\n${nested}`;
       index = nestedIndex;
     }
