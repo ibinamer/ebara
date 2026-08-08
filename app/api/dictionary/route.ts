@@ -3,6 +3,8 @@ export const runtime = "edge";
 const FREE_DICTIONARY_BASE_URL =
   "https://api.dictionaryapi.dev/api/v2/entries/en/";
 const WIKTIONARY_API_URL = "https://en.wiktionary.org/w/api.php";
+const GOOGLE_TRANSLATE_PUBLIC_URL =
+  "https://translate.googleapis.com/translate_a/single";
 const MYMEMORY_API_URL = "https://api.mymemory.translated.net/get";
 const MAX_BODY_BYTES = 2_048;
 const MAX_WORD_LENGTH = 80;
@@ -231,12 +233,20 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   if (!meaningAr) {
-    const translated = await fetchArabicTranslation(
+    const googleTranslated = await fetchGoogleArabicTranslation(
       english.data.word,
       english.data.part_of_speech,
     );
-    if (!translated.ok) return lookupErrorResponse(translated, rate);
-    meaningAr = translated.data;
+    if (googleTranslated.ok) {
+      meaningAr = googleTranslated.data;
+    } else {
+      const translated = await fetchArabicTranslation(
+        english.data.word,
+        english.data.part_of_speech,
+      );
+      if (!translated.ok) return lookupErrorResponse(translated, rate);
+      meaningAr = translated.data;
+    }
   }
 
   return Response.json(
@@ -250,6 +260,62 @@ export async function POST(request: Request): Promise<Response> {
     },
     { status: 200, headers: responseHeaders(rate) },
   );
+}
+
+async function fetchGoogleArabicTranslation(
+  word: string,
+  partOfSpeech: string,
+): Promise<LookupDecision<string>> {
+  const url = new URL(GOOGLE_TRANSLATE_PUBLIC_URL);
+  const sourceText = partOfSpeech.toLocaleLowerCase("en").includes("noun")
+    ? `a ${word}`
+    : word;
+  url.searchParams.set("client", "gtx");
+  url.searchParams.set("sl", "en");
+  url.searchParams.set("tl", "ar");
+  url.searchParams.set("dt", "t");
+  url.searchParams.set("q", sourceText);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(url, { signal: controller.signal });
+  } catch {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "The Arabic translation service is temporarily unavailable.",
+      502,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "The Arabic translation service could not complete this lookup.",
+      502,
+    );
+  }
+
+  const json = await readBoundedJson(response);
+  const responseData = json.ok ? json.data : null;
+  const firstTranslation = Array.isArray(responseData) ? responseData[0] : null;
+  const firstSegment = Array.isArray(firstTranslation)
+    ? firstTranslation[0]
+    : null;
+  const translated = Array.isArray(firstSegment)
+    ? boundedString(firstSegment[0], 512)
+    : null;
+  if (!translated || !ARABIC_CHARACTER_PATTERN.test(translated)) {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "No Arabic meaning was found for this word.",
+      422,
+    );
+  }
+  return { ok: true, data: translated };
 }
 
 async function fetchArabicTranslation(
