@@ -3,6 +3,7 @@ export const runtime = "edge";
 const FREE_DICTIONARY_BASE_URL =
   "https://api.dictionaryapi.dev/api/v2/entries/en/";
 const WIKTIONARY_API_URL = "https://en.wiktionary.org/w/api.php";
+const MYMEMORY_API_URL = "https://api.mymemory.translated.net/get";
 const MAX_BODY_BYTES = 2_048;
 const MAX_WORD_LENGTH = 80;
 const MAX_UPSTREAM_BYTES = 1_500_000;
@@ -213,35 +214,29 @@ export async function POST(request: Request): Promise<Response> {
   ]);
 
   if (!english.ok) return lookupErrorResponse(english, rate);
-  if (!mainWikitext.ok) return lookupErrorResponse(mainWikitext, rate);
-
-  let meaningAr = findArabicMeaning(
-    mainWikitext.data,
-    english.data.definition_en,
-  );
+  let meaningAr = mainWikitext.ok
+    ? findArabicMeaning(mainWikitext.data, english.data.definition_en)
+    : null;
 
   if (!meaningAr) {
     // Large Wiktionary entries sometimes move translation tables to a dedicated
     // subpage. This is still a direct dictionary lookup, not machine translation.
-    const translationSubpage = await fetchWiktionaryWikitext(
-      `${english.data.word}/translations`,
-    );
-    if (!translationSubpage.ok) {
-      return lookupErrorResponse(translationSubpage, rate);
+    const translationSubpage = await fetchWiktionaryWikitext(`${english.data.word}/translations`);
+    if (translationSubpage.ok) {
+      meaningAr = findArabicMeaning(
+        translationSubpage.data,
+        english.data.definition_en,
+      );
     }
-    meaningAr = findArabicMeaning(
-      translationSubpage.data,
-      english.data.definition_en,
-    );
   }
 
   if (!meaningAr) {
-    return errorResponse(
-      "ARABIC_MEANING_NOT_FOUND",
-      "This word has no verified Arabic meaning in Wiktionary yet.",
-      422,
-      rate,
+    const translated = await fetchArabicTranslation(
+      english.data.word,
+      english.data.part_of_speech,
     );
+    if (!translated.ok) return lookupErrorResponse(translated, rate);
+    meaningAr = translated.data;
   }
 
   return Response.json(
@@ -255,6 +250,72 @@ export async function POST(request: Request): Promise<Response> {
     },
     { status: 200, headers: responseHeaders(rate) },
   );
+}
+
+async function fetchArabicTranslation(
+  word: string,
+  partOfSpeech: string,
+): Promise<LookupDecision<string>> {
+  const url = new URL(MYMEMORY_API_URL);
+  // A bare English noun can be interpreted as an acronym or verb by generic
+  // translation memories (for example, "cat"). The article preserves the
+  // dictionary sense while still returning a concise Arabic headword.
+  const sourceText = partOfSpeech.toLocaleLowerCase("en").includes("noun")
+    ? `a ${word}`
+    : word;
+  url.searchParams.set("q", sourceText);
+  url.searchParams.set("langpair", "en|ar");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+  } catch {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "The Arabic translation service is temporarily unavailable.",
+      502,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "The Arabic translation service could not complete this lookup.",
+      502,
+    );
+  }
+
+  const json = await readBoundedJson(response);
+  if (!json.ok || !isRecord(json.data) || !isRecord(json.data.responseData)) {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "The Arabic translation service returned an unreadable response.",
+      502,
+    );
+  }
+
+  const translated = boundedString(
+    json.data.responseData.translatedText,
+    512,
+  );
+  if (!translated || !ARABIC_CHARACTER_PATTERN.test(translated)) {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "No Arabic meaning was found for this word.",
+      422,
+    );
+  }
+
+  return { ok: true, data: translated };
 }
 
 async function findCachedWord(
