@@ -16,6 +16,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Volume2,
   X,
 } from "lucide-react";
 import {
@@ -34,10 +35,24 @@ type WordRecord = {
   user_id: string;
   word: string;
   meaning_ar: string;
+  definition_en: string;
+  pronunciation: string;
+  ipa: string;
+  part_of_speech: string;
+  example_sentence: string;
   created_at: string;
 };
 
-type Translation = Pick<WordRecord, "word" | "meaning_ar">;
+type DictionaryEntry = Pick<
+  WordRecord,
+  | "word"
+  | "meaning_ar"
+  | "definition_en"
+  | "pronunciation"
+  | "ipa"
+  | "part_of_speech"
+  | "example_sentence"
+>;
 
 type AuthMode = "login" | "signup" | "forgot" | "update";
 type AddStep = "capture" | "review";
@@ -72,6 +87,11 @@ const DEMO_WORDS: WordRecord[] = [
     user_id: "demo-user",
     word: "perseverance",
     meaning_ar: "المثابرة",
+    definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
+    pronunciation: "per-suh-VEER-uhns",
+    ipa: "/ˌpɜː.səˈvɪə.rəns/",
+    part_of_speech: "noun",
+    example_sentence: "Her perseverance helped her finish the difficult project.",
     created_at: "2026-08-01T14:42:00.000Z",
   },
   {
@@ -79,6 +99,11 @@ const DEMO_WORDS: WordRecord[] = [
     user_id: "demo-user",
     word: "serendipity",
     meaning_ar: "صدفة سعيدة",
+    definition_en: "The pleasant discovery of something valuable or interesting by chance.",
+    pronunciation: "ser-uhn-DIP-uh-tee",
+    ipa: "/ˌser.ənˈdɪp.ə.ti/",
+    part_of_speech: "noun",
+    example_sentence: "Finding that quiet bookshop was pure serendipity.",
     created_at: "2026-07-31T14:16:00.000Z",
   },
   {
@@ -86,6 +111,11 @@ const DEMO_WORDS: WordRecord[] = [
     user_id: "demo-user",
     word: "subtle",
     meaning_ar: "دقيق، غير واضح",
+    definition_en: "So delicate or precise that it is difficult to notice or describe.",
+    pronunciation: "SUHT-l",
+    ipa: "/ˈsʌt.əl/",
+    part_of_speech: "adjective",
+    example_sentence: "The room had a subtle scent of cedar.",
     created_at: "2026-07-29T11:05:00.000Z",
   },
   {
@@ -93,22 +123,42 @@ const DEMO_WORDS: WordRecord[] = [
     user_id: "demo-user",
     word: "gentle",
     meaning_ar: "لطيف، رقيق",
+    definition_en: "Kind, calm, or soft in manner or effect.",
+    pronunciation: "JEN-tl",
+    ipa: "/ˈdʒen.təl/",
+    part_of_speech: "adjective",
+    example_sentence: "She gave the door a gentle push.",
     created_at: "2026-07-25T12:31:00.000Z",
   },
 ];
 
-const DEMO_TRANSLATIONS: Record<string, Translation> = {
+const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
   perseverance: {
     word: "perseverance",
     meaning_ar: "المثابرة",
+    definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
+    pronunciation: "per-suh-VEER-uhns",
+    ipa: "/ˌpɜː.səˈvɪə.rəns/",
+    part_of_speech: "noun",
+    example_sentence: "Her perseverance helped her finish the difficult project.",
   },
   perserverance: {
-    word: "perserverance",
+    word: "perseverance",
     meaning_ar: "المثابرة",
+    definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
+    pronunciation: "per-suh-VEER-uhns",
+    ipa: "/ˌpɜː.səˈvɪə.rəns/",
+    part_of_speech: "noun",
+    example_sentence: "Her perseverance helped her finish the difficult project.",
   },
   curious: {
     word: "curious",
     meaning_ar: "فضولي",
+    definition_en: "Eager to know or learn something.",
+    pronunciation: "KYOOR-ee-uhs",
+    ipa: "/ˈkjʊə.ri.əs/",
+    part_of_speech: "adjective",
+    example_sentence: "The curious child asked another question.",
   },
 };
 
@@ -124,14 +174,29 @@ function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function fallbackTranslation(value: string): Translation {
+function speakWord(value: string) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(value);
+  utterance.lang = "en-US";
+  utterance.rate = 0.86;
+  window.speechSynthesis.speak(utterance);
+}
+
+function fallbackDictionaryEntry(value: string): DictionaryEntry {
   const normalized = normalizeCandidate(value);
-  const known = DEMO_TRANSLATIONS[normalized];
+  const known = DEMO_DICTIONARY[normalized];
   if (known) return known;
 
   return {
     word: normalized,
     meaning_ar: "معنى تجريبي",
+    definition_en: "Dictionary details are available after the live services are connected.",
+    pronunciation: "",
+    ipa: "",
+    part_of_speech: "word",
+    example_sentence: "",
   };
 }
 
@@ -164,27 +229,6 @@ function AppMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function GoogleAttribution({ className = "" }: { className?: string }) {
-  return (
-    <a
-      href="https://translate.google.com/"
-      target="_blank"
-      rel="noreferrer"
-      className={`google-attribution ${className}`}
-      aria-label="Translations powered by Google Translate"
-    >
-      {/* Vinext's image optimizer is not available in the edge preview runtime. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/google-translate-attribution.png"
-        alt="Powered by Google Translate"
-        width="176"
-        height="16"
-      />
-    </a>
-  );
-}
-
 export default function VocabularyBox({
   supabaseUrl,
   supabaseAnonKey,
@@ -213,7 +257,9 @@ export default function VocabularyBox({
     setIsLoadingWords(true);
     const { data, error } = await supabase
       .from("words")
-      .select("id,user_id,word,meaning_ar,created_at")
+      .select(
+        "id,user_id,word,meaning_ar,definition_en,pronunciation,ipa,part_of_speech,example_sentence,created_at",
+      )
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -276,14 +322,14 @@ export default function VocabularyBox({
     setWords([]);
   }
 
-  async function handleSave(translation: Translation) {
-    if (words.some((entry) => entry.word.toLowerCase() === translation.word.toLowerCase())) {
+  async function handleSave(dictionaryEntry: DictionaryEntry) {
+    if (words.some((entry) => entry.word.toLowerCase() === dictionaryEntry.word.toLowerCase())) {
       throw new Error("This word is already in your box.");
     }
 
     if (demoMode || !supabase || !session) {
       const previewWord: WordRecord = {
-        ...translation,
+        ...dictionaryEntry,
         id: `demo-${Date.now()}`,
         user_id: "demo-user",
         created_at: new Date().toISOString(),
@@ -297,8 +343,13 @@ export default function VocabularyBox({
       .from("words")
       .insert({
         user_id: session.user.id,
-        word: translation.word,
-        meaning_ar: translation.meaning_ar,
+        word: dictionaryEntry.word,
+        meaning_ar: dictionaryEntry.meaning_ar,
+        definition_en: dictionaryEntry.definition_en,
+        pronunciation: dictionaryEntry.pronunciation,
+        ipa: dictionaryEntry.ipa,
+        part_of_speech: dictionaryEntry.part_of_speech,
+        example_sentence: dictionaryEntry.example_sentence,
       })
       .select()
       .single();
@@ -309,7 +360,7 @@ export default function VocabularyBox({
     }
 
     setWords((current) => [data as WordRecord, ...current]);
-    setToast(`${capitalize(translation.word)} is safe in your box.`);
+    setToast(`${capitalize(dictionaryEntry.word)} is safe in your box.`);
   }
 
   async function handleDelete() {
@@ -455,25 +506,23 @@ export default function VocabularyBox({
 
       <footer className="relative z-[1] mx-auto flex max-w-[1180px] flex-col gap-3 border-t border-white/[0.05] px-5 py-8 text-[11px] leading-5 text-white/25 sm:px-8">
         <p className="max-w-2xl">
-          Vocabulary Box uses Google Translate to provide automatic Arabic meanings.
+          Dictionary data from{" "}
+          <a className="transition hover:text-white/45" href="https://dictionaryapi.dev/" target="_blank" rel="noreferrer">
+            Free Dictionary API
+          </a>{" "}
+          and Arabic meanings from{" "}
+          <a className="transition hover:text-white/45" href="https://en.wiktionary.org/" target="_blank" rel="noreferrer">
+            Wiktionary
+          </a>{" "}
+          (CC BY-SA).
         </p>
-        <details className="max-w-3xl">
-          <summary className="w-fit cursor-pointer transition hover:text-white/45">
-            Translation disclaimer
-          </summary>
-          <p className="mt-2">
-            THIS SERVICE MAY CONTAIN TRANSLATIONS POWERED BY GOOGLE. GOOGLE DISCLAIMS ALL
-            WARRANTIES RELATED TO THE TRANSLATIONS, EXPRESS OR IMPLIED, INCLUDING ANY
-            WARRANTIES OF ACCURACY, RELIABILITY, AND ANY IMPLIED WARRANTIES OF MERCHANTABILITY,
-            FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-          </p>
-        </details>
       </footer>
 
       <AddWordDialog
         open={addOpen}
         session={session}
         demoMode={demoMode}
+        savedWords={words}
         onClose={() => setAddOpen(false)}
         onSave={handleSave}
       />
@@ -767,13 +816,11 @@ function WordCard({
           <h3 className="break-words text-[clamp(1.65rem,4vw,2.25rem)] font-semibold leading-tight tracking-[-0.045em] text-[#f1f5f2] transition-colors group-hover:text-emerald-200">
             {entry.word}
           </h3>
-          <p lang="ar-x-mtfrom-en" dir="rtl" className="mt-3 w-fit text-base leading-7 text-white/42">
+          <p lang="ar" dir="rtl" className="mt-3 w-fit text-base leading-7 text-white/42">
             {entry.meaning_ar}
           </p>
         </div>
       </button>
-
-      <GoogleAttribution className="absolute bottom-5 left-6 z-[1] sm:left-7" />
 
       <button
         type="button"
@@ -832,19 +879,21 @@ function AddWordDialog({
   open,
   session,
   demoMode,
+  savedWords,
   onClose,
   onSave,
 }: {
   open: boolean;
   session: Session | null;
   demoMode: boolean;
+  savedWords: WordRecord[];
   onClose: () => void;
-  onSave: (word: Translation) => Promise<void>;
+  onSave: (word: DictionaryEntry) => Promise<void>;
 }) {
   const [step, setStep] = useState<AddStep>("capture");
   const [draft, setDraft] = useState("");
   const [voiceAlternatives, setVoiceAlternatives] = useState<SpeechAlternative[]>([]);
-  const [translation, setTranslation] = useState<Translation | null>(null);
+  const [dictionaryEntry, setDictionaryEntry] = useState<DictionaryEntry | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -861,7 +910,7 @@ function AddWordDialog({
     setStep("capture");
     setDraft("");
     setVoiceAlternatives([]);
-    setTranslation(null);
+    setDictionaryEntry(null);
     setIsListening(false);
     setIsProcessing(false);
     setIsSaving(false);
@@ -892,22 +941,34 @@ function AddWordDialog({
     return () => window.removeEventListener("keydown", handleKey);
   }, [open, isProcessing, isSaving, closeDialog]);
 
-  async function translateWord(candidate: string) {
+  async function lookupWord(candidate: string) {
     const normalized = normalizeCandidate(candidate);
-    if (!normalized || normalized.length > 80) {
-      setError("Enter one English word or a short phrase.");
+    if (
+      !normalized ||
+      normalized.length > 80 ||
+      !/^[a-z]+(?:['-][a-z]+)*$/.test(normalized)
+    ) {
+      setError("Enter one English word.");
+      return;
+    }
+
+    const existingWord = savedWords.find(
+      (entry) => normalizeCandidate(entry.word) === normalized,
+    );
+    if (existingWord) {
+      setError("This word is already in your box.");
       return;
     }
 
     setError(null);
     setIsProcessing(true);
     try {
-      let result: Translation;
+      let result: DictionaryEntry;
       if (demoMode) {
         await new Promise((resolve) => window.setTimeout(resolve, 650));
-        result = fallbackTranslation(normalized);
+        result = fallbackDictionaryEntry(normalized);
       } else {
-        const response = await fetch("/api/translate", {
+        const response = await fetch("/api/dictionary", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -915,26 +976,26 @@ function AddWordDialog({
           },
           body: JSON.stringify({ word: normalized }),
         });
-        const payload = (await response.json()) as Translation & {
+        const payload = (await response.json()) as DictionaryEntry & {
           error?: string | { message?: string };
           message?: string;
-          data?: Translation;
+          data?: DictionaryEntry;
         };
         if (!response.ok) {
           const apiMessage =
             typeof payload.error === "string"
               ? payload.error
               : payload.error?.message ?? payload.message;
-          throw new Error(apiMessage || "We couldn’t translate that word.");
+          throw new Error(apiMessage || "We couldn’t find that word.");
         }
         result = payload.data ?? payload;
       }
 
       setDraft(result.word);
-      setTranslation(result);
+      setDictionaryEntry(result);
       setStep("review");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "We couldn’t translate that word.");
+      setError(caught instanceof Error ? caught.message : "We couldn’t find that word.");
     } finally {
       setIsProcessing(false);
     }
@@ -995,11 +1056,11 @@ function AddWordDialog({
   }
 
   async function saveWord() {
-    if (!translation) return;
+    if (!dictionaryEntry) return;
     setIsSaving(true);
     setError(null);
     try {
-      await onSave(translation);
+      await onSave(dictionaryEntry);
       closeDialog();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "We couldn’t save this word.");
@@ -1009,7 +1070,7 @@ function AddWordDialog({
   }
 
   function handleDraftKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter" && draft.trim() && !isProcessing) void translateWord(draft);
+    if (event.key === "Enter" && draft.trim() && !isProcessing) void lookupWord(draft);
   }
 
   if (!open) return null;
@@ -1020,10 +1081,10 @@ function AddWordDialog({
         <div className="flex items-start justify-between gap-6">
           <div>
             <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.17em] text-emerald-300/65">
-              {step === "capture" ? "A new word" : "Translation ready"}
+              {step === "capture" ? "A new word" : "Word ready"}
             </p>
             <h2 id="add-word-title" className="text-3xl font-semibold tracking-[-0.045em] text-white sm:text-4xl">
-              {step === "capture" ? "What did you learn?" : translation?.word}
+              {step === "capture" ? "What did you learn?" : dictionaryEntry?.word}
             </h2>
           </div>
           <button type="button" onClick={closeDialog} className="icon-button" aria-label="Close add word">
@@ -1034,7 +1095,7 @@ function AddWordDialog({
         {step === "capture" ? (
           <div className="mt-9">
             <p className="max-w-md text-sm leading-6 text-white/40">
-              Type an English word, or say it out loud. We’ll translate it to Arabic.
+              Type an English word, or say it out loud. We’ll find its meaning and definition.
             </p>
 
             <div className={`capture-field mt-7 ${isListening ? "is-listening" : ""}`}>
@@ -1094,23 +1155,54 @@ function AddWordDialog({
             <div className="mt-9 flex justify-end">
               <button
                 type="button"
-                onClick={() => void translateWord(draft)}
+                onClick={() => void lookupWord(draft)}
                 className="primary-button min-w-36"
                 disabled={!draft.trim() || isProcessing || isListening}
               >
                 {isProcessing ? <LoaderCircle size={18} className="animate-spin" aria-hidden="true" /> : <Languages size={17} aria-hidden="true" />}
-                {isProcessing ? "Translating…" : "Translate with Google"}
+                {isProcessing ? "Looking up…" : "Look up word"}
               </button>
             </div>
           </div>
-        ) : translation ? (
+        ) : dictionaryEntry ? (
           <div className="mt-7">
             <div className="rounded-[22px] border border-white/[0.07] bg-black/20 p-5 sm:p-6">
+              {(dictionaryEntry.pronunciation || dictionaryEntry.ipa) && (
+                <div className="mb-6 grid gap-5 border-b border-white/[0.07] pb-6 sm:grid-cols-2">
+                  {dictionaryEntry.pronunciation && (
+                    <div>
+                      <p className="detail-label">Pronunciation</p>
+                      <button
+                        type="button"
+                        onClick={() => speakWord(dictionaryEntry.word)}
+                        className="pronunciation-button mt-3"
+                        aria-label={`Pronounce ${dictionaryEntry.word}`}
+                      >
+                        <Volume2 size={16} aria-hidden="true" />
+                        {dictionaryEntry.pronunciation}
+                      </button>
+                    </div>
+                  )}
+                  {dictionaryEntry.ipa && (
+                    <div>
+                      <p className="detail-label">IPA</p>
+                      <p className="mt-3 font-mono text-sm leading-7 text-emerald-200/80">
+                        {dictionaryEntry.ipa}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
               <p className="detail-label">Arabic meaning</p>
-              <p lang="ar-x-mtfrom-en" dir="rtl" className="mt-4 w-fit text-2xl font-medium leading-9 text-white/90">
-                {translation.meaning_ar}
+              <p lang="ar" dir="rtl" className="mt-4 w-fit text-2xl font-medium leading-9 text-white/90">
+                {dictionaryEntry.meaning_ar}
               </p>
-              <GoogleAttribution className="mt-5 w-fit" />
+              <div className="mt-6 border-t border-white/[0.07] pt-6">
+                <p className="detail-label">Definition</p>
+                <p className="mt-3 text-sm leading-6 text-white/60">
+                  {dictionaryEntry.definition_en}
+                </p>
+              </div>
             </div>
 
             {error && <DialogError message={error} />}
@@ -1169,17 +1261,59 @@ function WordDetailsDialog({ entry, onClose }: { entry: WordRecord; onClose: () 
           </button>
         </div>
 
+        {(entry.pronunciation || entry.ipa) && (
+          <section className="mt-9 grid gap-6 rounded-[22px] border border-white/[0.07] bg-black/20 p-5 sm:grid-cols-2 sm:p-6">
+            {entry.pronunciation && (
+              <div>
+                <p className="detail-label">Pronunciation</p>
+                <button
+                  type="button"
+                  onClick={() => speakWord(entry.word)}
+                  className="pronunciation-button mt-3"
+                  aria-label={`Pronounce ${entry.word}`}
+                >
+                  <Volume2 size={16} aria-hidden="true" />
+                  {entry.pronunciation}
+                </button>
+              </div>
+            )}
+            {entry.ipa && (
+              <div>
+                <p className="detail-label">IPA</p>
+                <p className="mt-3 font-mono text-base leading-7 text-emerald-200/80">
+                  {entry.ipa}
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+
         <section className="mt-10 border-t border-white/[0.07] pt-9">
           <p className="detail-label">Arabic meaning</p>
           <p
-            lang="ar-x-mtfrom-en"
+            lang="ar"
             dir="rtl"
             className="mt-4 w-fit text-3xl font-medium leading-10 text-white/90"
           >
             {entry.meaning_ar}
           </p>
-          <GoogleAttribution className="mt-6 w-fit" />
         </section>
+
+        <section className="mt-9 border-t border-white/[0.07] pt-9">
+          <p className="detail-label">Definition</p>
+          <p className="mt-4 max-w-2xl text-base leading-7 text-white/68">
+            {entry.definition_en}
+          </p>
+        </section>
+
+        {entry.example_sentence && (
+          <section className="mt-9 border-t border-white/[0.07] pt-9">
+            <p className="detail-label">Example</p>
+            <p className="mt-4 max-w-2xl text-base italic leading-7 text-white/62">
+              “{entry.example_sentence}”
+            </p>
+          </section>
+        )}
       </section>
     </div>
   );
@@ -1218,7 +1352,7 @@ function DeleteDialog({
           Remove “{entry.word}”?
         </h2>
         <p id="delete-description" className="mt-3 text-sm leading-6 text-white/42">
-          This word and its translation will be permanently removed from your box.
+          This word and its dictionary details will be permanently removed from your box.
         </p>
         <div className="mt-8 grid grid-cols-2 gap-3">
           <button type="button" onClick={onCancel} className="secondary-button justify-center">

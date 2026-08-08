@@ -22,15 +22,40 @@ create table public.words (
   user_id uuid not null references auth.users (id) on delete cascade,
   word text not null,
   meaning_ar text not null,
+  definition_en text not null,
+  pronunciation text not null default '',
+  ipa text not null default '',
+  part_of_speech text not null,
+  example_sentence text not null default '',
   created_at timestamptz not null default now(),
 
   constraint words_word_valid check (
     word = btrim(word)
-    and char_length(word) between 1 and 128
+    and char_length(word) between 1 and 80
   ),
   constraint words_meaning_ar_valid check (
     meaning_ar = btrim(meaning_ar)
     and char_length(meaning_ar) between 1 and 512
+  ),
+  constraint words_definition_en_valid check (
+    definition_en = btrim(definition_en)
+    and char_length(definition_en) between 1 and 1500
+  ),
+  constraint words_pronunciation_valid check (
+    pronunciation = btrim(pronunciation)
+    and char_length(pronunciation) <= 160
+  ),
+  constraint words_ipa_valid check (
+    ipa = btrim(ipa)
+    and char_length(ipa) <= 180
+  ),
+  constraint words_part_of_speech_valid check (
+    part_of_speech = btrim(part_of_speech)
+    and char_length(part_of_speech) between 1 and 80
+  ),
+  constraint words_example_sentence_valid check (
+    example_sentence = btrim(example_sentence)
+    and char_length(example_sentence) <= 1000
   )
 );
 
@@ -42,6 +67,8 @@ create index words_user_created_at_idx
   on public.words (user_id, created_at desc);
 
 -- Treat differently-cased spellings as the same saved word for one user.
+-- This is the race-safe database guard after both client and server check the
+-- owner's saved collection before making any dictionary requests.
 create unique index words_user_word_unique_idx
   on public.words (user_id, lower(word));
 
@@ -128,11 +155,21 @@ grant select, delete on table public.words to authenticated;
 grant insert (
   user_id,
   word,
-  meaning_ar
+  meaning_ar,
+  definition_en,
+  pronunciation,
+  ipa,
+  part_of_speech,
+  example_sentence
 ) on public.words to authenticated;
 grant update (
   word,
-  meaning_ar
+  meaning_ar,
+  definition_en,
+  pronunciation,
+  ipa,
+  part_of_speech,
+  example_sentence
 ) on public.words to authenticated;
 
 -- The server-only service role remains available for trusted maintenance.

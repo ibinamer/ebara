@@ -468,15 +468,26 @@ input:focus-visible {
   color: rgba(255, 255, 255, 0.88);
 }
 
-.google-attribution {
+.pronunciation-button {
   display: inline-flex;
+  min-height: 2.45rem;
   align-items: center;
+  gap: 0.55rem;
+  border: 1px solid rgba(52, 211, 153, 0.16);
+  border-radius: 999px;
+  background: rgba(52, 211, 153, 0.07);
+  padding: 0.4rem 0.75rem;
+  color: rgba(167, 243, 208, 0.78);
+  font-size: 0.82rem;
+  line-height: 1.35rem;
+  transition: border-color 180ms ease, background-color 180ms ease, color 180ms ease;
+  cursor: pointer;
 }
 
-.google-attribution img {
-  display: block;
-  width: 11rem;
-  height: auto;
+.pronunciation-button:hover {
+  border-color: rgba(52, 211, 153, 0.28);
+  background: rgba(52, 211, 153, 0.11);
+  color: rgba(209, 250, 229, 0.92);
 }
 
 .detail-label {

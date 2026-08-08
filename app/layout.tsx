@@ -32,14 +32,14 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "Vocabulary Box — Every word, never lost",
     description:
-      "A quiet, private home for English words and Arabic meanings powered by Google Translate.",
+      "A quiet, private home for English words, dictionary details, and Arabic meanings.",
     applicationName: "Vocabulary Box",
     authors: [{ name: "Vocabulary Box" }],
     keywords: ["vocabulary", "English words", "personal dictionary", "Arabic meaning"],
     openGraph: {
       type: "website",
       title: "Vocabulary Box",
-      description: "Save English words with Arabic meanings powered by Google Translate.",
+      description: "Save English words with definitions and Arabic meanings.",
       siteName: "Vocabulary Box",
       images: [
         {
@@ -53,7 +53,7 @@ export async function generateMetadata(): Promise<Metadata> {
     twitter: {
       card: "summary_large_image",
       title: "Vocabulary Box",
-      description: "Save English words with Arabic meanings powered by Google Translate.",
+      description: "Save English words with definitions and Arabic meanings.",
       images: [socialImage],
     },
     icons: {
