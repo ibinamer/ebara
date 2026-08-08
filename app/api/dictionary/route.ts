@@ -188,24 +188,29 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const auth = await authenticateSupabaseRequest(request);
-  if (!auth.ok) {
-    return errorResponse(
-      auth.code,
-      auth.message,
-      auth.status,
-      rate,
-      auth.retryAfter ? { "Retry-After": auth.retryAfter } : undefined,
-    );
-  }
+  const hasBearerToken = /^Bearer\s+\S+$/iu.test(
+    request.headers.get("authorization")?.trim() ?? "",
+  );
+  if (hasBearerToken) {
+    const auth = await authenticateSupabaseRequest(request);
+    if (!auth.ok) {
+      return errorResponse(
+        auth.code,
+        auth.message,
+        auth.status,
+        rate,
+        auth.retryAfter ? { "Retry-After": auth.retryAfter } : undefined,
+      );
+    }
 
-  const cached = await findCachedWord(auth, word);
-  if (!cached.ok) return lookupErrorResponse(cached, rate);
-  if (cached.data) {
-    return Response.json(
-      { ok: true as const, cached: true, data: cached.data },
-      { status: 200, headers: responseHeaders(rate) },
-    );
+    const cached = await findCachedWord(auth, word);
+    if (!cached.ok) return lookupErrorResponse(cached, rate);
+    if (cached.data) {
+      return Response.json(
+        { ok: true as const, cached: true, data: cached.data },
+        { status: 200, headers: responseHeaders(rate) },
+      );
+    }
   }
 
   // Both sources are ordinary published dictionaries. Starting the independent

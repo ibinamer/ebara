@@ -162,6 +162,9 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
   },
 };
 
+const GUEST_WORDS_STORAGE_KEY = "vocabulary-box:guest-words";
+const GUEST_ACTIVE_STORAGE_KEY = "vocabulary-box:guest-active";
+
 function normalizeCandidate(value: string) {
   return value
     .toLowerCase()
@@ -243,6 +246,7 @@ export default function VocabularyBox({
   const demoMode = !supabase;
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(demoMode);
+  const [guestMode, setGuestMode] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [words, setWords] = useState<WordRecord[]>(demoMode ? DEMO_WORDS : []);
   const [isLoadingWords, setIsLoadingWords] = useState(false);
@@ -278,7 +282,19 @@ export default function VocabularyBox({
       if (!active) return;
       setSession(data.session);
       setAuthReady(true);
-      if (data.session) void loadWords();
+      if (data.session) {
+        window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
+        setGuestMode(false);
+        void loadWords();
+      } else if (window.localStorage.getItem(GUEST_ACTIVE_STORAGE_KEY) === "true") {
+        try {
+          const stored = window.localStorage.getItem(GUEST_WORDS_STORAGE_KEY);
+          setWords(stored ? (JSON.parse(stored) as WordRecord[]) : []);
+        } catch {
+          setWords([]);
+        }
+        setGuestMode(true);
+      }
     });
 
     const {
@@ -288,7 +304,11 @@ export default function VocabularyBox({
       setSession(nextSession);
       setAuthReady(true);
       if (event === "PASSWORD_RECOVERY") setAuthMode("update");
-      if (nextSession && event === "SIGNED_IN") void loadWords();
+      if (nextSession && event === "SIGNED_IN") {
+        window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
+        setGuestMode(false);
+        void loadWords();
+      }
     });
 
     return () => {
@@ -296,6 +316,11 @@ export default function VocabularyBox({
       subscription.unsubscribe();
     };
   }, [demoMode, loadWords, supabase]);
+
+  useEffect(() => {
+    if (demoMode || session || !guestMode) return;
+    window.localStorage.setItem(GUEST_WORDS_STORAGE_KEY, JSON.stringify(words));
+  }, [demoMode, guestMode, session, words]);
 
   useEffect(() => {
     if (!toast) return;
@@ -314,12 +339,31 @@ export default function VocabularyBox({
   }, [searchQuery, words]);
 
   async function handleLogout() {
+    if (guestMode) {
+      window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
+      setGuestMode(false);
+      setWords([]);
+      return;
+    }
     if (demoMode || !supabase) {
       setToast("Connect Supabase to enable private accounts.");
       return;
     }
     await supabase.auth.signOut();
     setWords([]);
+  }
+
+  function continueAsGuest() {
+    let storedWords: WordRecord[] = [];
+    try {
+      const stored = window.localStorage.getItem(GUEST_WORDS_STORAGE_KEY);
+      if (stored) storedWords = JSON.parse(stored) as WordRecord[];
+    } catch {
+      storedWords = [];
+    }
+    window.localStorage.setItem(GUEST_ACTIVE_STORAGE_KEY, "true");
+    setWords(storedWords);
+    setGuestMode(true);
   }
 
   async function handleSave(dictionaryEntry: DictionaryEntry) {
@@ -331,7 +375,7 @@ export default function VocabularyBox({
       const previewWord: WordRecord = {
         ...dictionaryEntry,
         id: `demo-${Date.now()}`,
-        user_id: "demo-user",
+        user_id: guestMode ? "guest-user" : "demo-user",
         created_at: new Date().toISOString(),
       };
       setWords((current) => [previewWord, ...current]);
@@ -367,7 +411,7 @@ export default function VocabularyBox({
     if (!wordToDelete) return;
     const target = wordToDelete;
 
-    if (!demoMode && supabase) {
+    if (!demoMode && supabase && session) {
       const { error } = await supabase.from("words").delete().eq("id", target.id);
       if (error) {
         setToast("We couldn’t delete this word. Please try again.");
@@ -383,9 +427,14 @@ export default function VocabularyBox({
 
   if (!authReady) return <LoadingScreen />;
 
-  if (!demoMode && !session) {
+  if (!demoMode && !session && !guestMode) {
     return (
-      <AuthScreen client={supabase} mode={authMode} onModeChange={setAuthMode} />
+      <AuthScreen
+        client={supabase}
+        mode={authMode}
+        onModeChange={setAuthMode}
+        onContinueGuest={continueAsGuest}
+      />
     );
   }
 
@@ -398,14 +447,14 @@ export default function VocabularyBox({
           <AppMark compact />
 
           <div className="flex items-center gap-2.5">
-            {demoMode && (
+            {(demoMode || guestMode) && (
               <span className="hidden rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[11px] font-medium tracking-wide text-white/45 sm:inline-flex">
-                Preview
+                {guestMode ? "Guest · saved on this device" : "Preview"}
               </span>
             )}
             <div
               className="grid size-9 place-items-center rounded-full border border-emerald-300/15 bg-emerald-400/10 text-xs font-semibold text-emerald-300"
-              aria-label={session?.user.email ?? "Preview account"}
+              aria-label={session?.user.email ?? (guestMode ? "Guest account" : "Preview account")}
             >
               {getInitial(session?.user.email)}
             </div>
@@ -413,8 +462,8 @@ export default function VocabularyBox({
               type="button"
               onClick={handleLogout}
               className="icon-button"
-              aria-label="Log out"
-              title="Log out"
+              aria-label={guestMode ? "Log in or create account" : "Log out"}
+              title={guestMode ? "Log in or create account" : "Log out"}
             >
               <LogOut size={17} aria-hidden="true" />
             </button>
@@ -566,10 +615,12 @@ function AuthScreen({
   client,
   mode,
   onModeChange,
+  onContinueGuest,
 }: {
   client: SupabaseClient;
   mode: AuthMode;
   onModeChange: (mode: AuthMode) => void;
+  onContinueGuest: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -761,6 +812,23 @@ function AuthScreen({
                 {!isSubmitting && <ArrowRight size={17} aria-hidden="true" />}
               </button>
             </form>
+
+            {(mode === "login" || mode === "signup") && (
+              <div className="mt-4">
+                <div className="mb-4 flex items-center gap-3 text-[11px] uppercase tracking-[0.16em] text-white/20">
+                  <span className="h-px flex-1 bg-white/[0.07]" />
+                  or
+                  <span className="h-px flex-1 bg-white/[0.07]" />
+                </div>
+                <button type="button" onClick={onContinueGuest} className="secondary-button w-full">
+                  Continue without an account
+                  <ArrowRight size={17} aria-hidden="true" />
+                </button>
+                <p className="mt-3 text-center text-xs leading-5 text-white/28">
+                  Your words stay on this device. Create an account later to sync across devices.
+                </p>
+              </div>
+            )}
 
             {mode === "login" && (
               <p className="mt-6 text-center text-sm text-white/35">
