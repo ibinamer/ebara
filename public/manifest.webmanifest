@@ -1,0 +1,17 @@
+{
+  "name": "EBARA",
+  "short_name": "EBARA",
+  "description": "A quiet, private home for English words, dictionary details, and Arabic meanings.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#14100e",
+  "theme_color": "#14100e",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

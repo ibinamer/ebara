@@ -1,0 +1,1341 @@
+@import "tailwindcss";
+@import "./fonts.css";
+
+/* ---------------------------------------------------------------------------
+   EBARA design system
+   Two hand-tuned themes (not inverted): a warm off-white light theme and a
+   low-glare warm dark theme built for long study sessions. Every surface,
+   border and text tone is declared per theme so contrast stays deliberate.
+
+   Brand colour is SoundCloud orange, #ff5500. The neutrals are warmed to sit
+   under it — a green- or blue-tinted grey next to a saturated orange reads as
+   a mistake rather than a palette.
+
+   Two notes on how the orange is used:
+
+   1. `--accent` is the fill (buttons, the logo tile, the toast check). It is
+      the true brand orange in both themes so the product is recognisable.
+      `--accent-text` is a separate, retuned tone for orange *text* on a
+      background — deepened in light, lightened in dark — because that is where
+      reading actually happens and 4.5:1 has to hold.
+
+      `--accent-fg` — the ink *on* the orange — is a warm near-black rather than
+      white. White on #ff5500 is only 3.21:1; reaching 4.5:1 with white would
+      mean dulling the fill to about #d14300, which no longer reads as the
+      brand. Dark ink keeps #ff5500 exact and lands at 5.6:1.
+   2. `--danger` is deliberately pushed towards rose rather than the usual red.
+      A red destructive action sitting beside an orange brand colour is close
+      enough in hue to be genuinely ambiguous.
+--------------------------------------------------------------------------- */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #faf8f6;
+  --bg-veil: rgba(250, 248, 246, 0.82);
+  --surface: #ffffff;
+  --surface-2: #f3efeb;
+  --surface-hover: #faf7f4;
+  --border: #e9e2dc;
+  --border-strong: #d8cec5;
+
+  --text: #1c1310;
+  --text-muted: #6b5d56;
+  --text-faint: #7a695d;
+
+  --accent: #ff5500;
+  --accent-solid-hover: #e64d00;
+  --accent-fg: #2b0e00;
+  --accent-text: #b03c00;
+  --accent-soft: rgba(255, 85, 0, 0.1);
+  --accent-border: rgba(255, 85, 0, 0.28);
+
+  --danger: #be123c;
+  --danger-text: #a80f34;
+  --danger-soft: rgba(190, 18, 60, 0.075);
+  --danger-border: rgba(190, 18, 60, 0.22);
+
+  --ring: rgba(255, 85, 0, 0.35);
+  --overlay: rgba(28, 19, 16, 0.34);
+
+  --shadow-sm: 0 1px 2px rgba(28, 19, 16, 0.05);
+  --shadow-md: 0 4px 14px rgba(28, 19, 16, 0.07);
+  --shadow-lg: 0 20px 52px rgba(28, 19, 16, 0.14);
+
+  /* Paper: the tone the reading column sits on, a shade off the page. */
+  --paper: #ffffff;
+  --rule: #e4ddd6;
+  --rule-strong: #cdc2b8;
+  --row-hover: rgba(28, 19, 16, 0.032);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #14100e;
+  --bg-veil: rgba(20, 16, 14, 0.82);
+  --surface: #1d1815;
+  --surface-2: #251f1a;
+  --surface-hover: #2b241e;
+  --border: #302821;
+  --border-strong: #46392f;
+
+  --text: #f3ede8;
+  --text-muted: #b0a49b;
+  /* Lifted from #877b72: a frosted panel lightens the backdrop beneath it, and
+     the old tone fell to 3.7:1 on glass. This holds 4.8:1 there and 6:1 on the
+     plain page. */
+  --text-faint: #9c8e84;
+
+  --accent: #ff5500;
+  --accent-solid-hover: #ff6a1a;
+  --accent-fg: #2b0e00;
+  --accent-text: #ff8a4c;
+  --accent-soft: rgba(255, 85, 0, 0.14);
+  --accent-border: rgba(255, 85, 0, 0.32);
+
+  --danger: #fb7185;
+  --danger-text: #fda4af;
+  --danger-soft: rgba(251, 113, 133, 0.12);
+  --danger-border: rgba(251, 113, 133, 0.26);
+
+  --ring: rgba(255, 85, 0, 0.45);
+  --overlay: rgba(10, 6, 4, 0.62);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.34);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.48);
+
+  --paper: #191412;
+  --rule: #2e2620;
+  --rule-strong: #4a3d33;
+  --row-hover: rgba(255, 255, 255, 0.035);
+}
+
+/* ---------------------------------------------------------------------------
+   Type stack
+   Playfair Display leads for Latin and IBM Plex Sans Arabic sits behind it for
+   Arabic. Playfair ships no Arabic glyphs, so the browser resolves each
+   character to the right family on its own and a line mixing both scripts needs
+   no extra markup.
+
+   Each face is declared in app/fonts.css with its own `unicode-range`, so the
+   generic tail below only ever applies to characters neither webfont covers.
+--------------------------------------------------------------------------- */
+
+:root {
+  --stack-sans: "Playfair Display", "IBM Plex Sans Arabic", ui-serif, Georgia,
+    serif;
+  --stack-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --font-sans: var(--stack-sans);
+  --font-mono: var(--stack-mono);
+}
+
+/* --- Base ---------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100dvh;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--stack-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * Arabic sits on a longer line and never takes Latin tracking. The font stack
+ * itself does not change: Inter has no Arabic glyphs, so Arabic already
+ * resolves to Plex Arabic while English keeps Inter — including on a line that
+ * mixes both.
+ */
+:root[lang="ar"] body {
+  line-height: 1.85;
+  letter-spacing: 0;
+}
+
+/*
+ * Latin tracking is destructive in Arabic: it breaks the joins between
+ * letters. Neutralise it everywhere except inside runs explicitly marked as
+ * left-to-right, which are Latin content.
+ */
+:root[lang="ar"] :not([dir="ltr"]):not([dir="ltr"] *) {
+  letter-spacing: 0;
+}
+
+/* Arabic has no letter case, so uppercase labels are spaced-out noise. */
+:root[lang="ar"] .eyebrow,
+:root[lang="ar"] .detail-label,
+:root[lang="ar"] .type-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/*
+ * Inputs that are a ruled line rather than a box show focus by thickening
+ * their own rule. An outline drawn around the field would contradict the
+ * form — but the rule has to become unmistakable, not merely change hue, so
+ * focus stays as legible as a standard outline.
+ */
+.search-field input:focus-visible,
+.capture-field input:focus-visible {
+  outline: none;
+}
+
+.search-field:focus-within,
+.capture-field:focus-within,
+.capture-field.is-listening {
+  border-bottom-color: var(--accent);
+  box-shadow: 0 1px 0 0 var(--accent);
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------------------
+   Bidirectional text
+   Reading order and alignment are separate concerns. A run of English inside an
+   Arabic layout must still read left-to-right, but it should line up with the
+   interface edge rather than jumping to the opposite side of its own card.
+--------------------------------------------------------------------------- */
+
+/* Keeps a foreign-script run from reordering against its neighbours. */
+.bidi-isolate {
+  unicode-bidi: isolate;
+}
+
+/* Aligns to the interface start edge, whatever the content's own direction. */
+.text-ui-start {
+  text-align: left;
+}
+
+:root[dir="rtl"] .text-ui-start {
+  text-align: right;
+}
+
+/* Full left-to-right block, for English prose and phonetic notation. */
+.force-ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
+}
+
+/* Directional icons mirror when the interface flips. */
+[dir="rtl"] .flip-rtl {
+  transform: scaleX(-1);
+}
+
+/* Edge-to-edge scrollers read as a swipe affordance, not a scrollbar. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Component classes live in Tailwind's `components` layer so that utilities
+   such as `hidden`, `flex` or `mt-4` always win when used on the same element.
+--------------------------------------------------------------------------- */
+
+@layer components {
+
+/* ---------------------------------------------------------------------------
+   Typography scale
+   One place decides size, weight and rhythm for every kind of text. Arabic
+   overrides sit next to each rule: slightly lighter weight (Plex Arabic reads
+   heavier than Inter at the same value), more line height, and no tracking.
+--------------------------------------------------------------------------- */
+
+.type-display {
+  font-size: clamp(2.5rem, 7vw, 4.5rem);
+  font-weight: 500;
+  line-height: 1.08;
+  letter-spacing: -0.018em;
+}
+
+:root[lang="ar"] .type-display {
+  font-size: clamp(2.25rem, 6.2vw, 4rem);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.type-title {
+  font-size: clamp(2rem, 5.5vw, 3.25rem);
+  font-weight: 500;
+  line-height: 1.14;
+  letter-spacing: -0.015em;
+}
+
+:root[lang="ar"] .type-title {
+  font-size: clamp(1.85rem, 5vw, 2.9rem);
+  line-height: 1.4;
+}
+
+.type-heading {
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.32;
+  letter-spacing: -0.01em;
+}
+
+:root[lang="ar"] .type-heading {
+  font-size: 1.4rem;
+  line-height: 1.55;
+}
+
+.type-subheading {
+  font-size: 1.1875rem;
+  font-weight: 600;
+  line-height: 1.42;
+  letter-spacing: -0.008em;
+}
+
+:root[lang="ar"] .type-subheading {
+  line-height: 1.6;
+}
+
+/* Vocabulary words: the visual anchor of the product, and where the serif
+   earns its keep. Kept at 500 so the contrast reads elegant rather than heavy. */
+.type-word-lg {
+  font-size: clamp(2.25rem, 7vw, 3.5rem);
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.012em;
+}
+
+.type-word-md {
+  font-size: clamp(1.75rem, 5vw, 2.25rem);
+  font-weight: 500;
+  line-height: 1.18;
+  letter-spacing: -0.008em;
+}
+
+.type-meaning {
+  font-size: 1.5rem;
+  font-weight: 500;
+  line-height: 1.75;
+}
+
+/*
+ * Playfair is a high-contrast display face: at interface sizes its hairlines
+ * thin out badly at weight 400, so Latin body and small text sit at 500. Plex
+ * Arabic is low-contrast and needs no such compensation, which is why the
+ * Arabic overrides pull the weight back down to 400.
+ */
+.type-body {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.7;
+}
+
+:root[lang="ar"] .type-body {
+  font-size: 0.95rem;
+  font-weight: 400;
+  line-height: 1.9;
+}
+
+.type-body-lg {
+  font-size: 1.0625rem;
+  font-weight: 500;
+  line-height: 1.72;
+}
+
+:root[lang="ar"] .type-body-lg {
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.95;
+}
+
+.type-meta {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+:root[lang="ar"] .type-meta {
+  font-weight: 400;
+  line-height: 1.75;
+}
+
+.type-caption {
+  font-size: 0.78125rem;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+:root[lang="ar"] .type-caption {
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.75;
+}
+
+/* Uppercase at 11px in a contrast serif needs real weight to hold together. */
+.type-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/*
+ * IBM Plex Sans Arabic sets heavier than Inter at the same numeric weight, so
+ * small interface text drops a step to keep the page from shouting.
+ */
+:root[lang="ar"] .primary-button,
+:root[lang="ar"] .secondary-button,
+:root[lang="ar"] .danger-button,
+:root[lang="ar"] .ghost-button,
+:root[lang="ar"] .chip,
+:root[lang="ar"] .badge,
+:root[lang="ar"] .segmented button,
+:root[lang="ar"] .field-label {
+  font-weight: 500;
+}
+
+:root[lang="ar"] .notice,
+:root[lang="ar"] .toast,
+:root[lang="ar"] .search-field input,
+:root[lang="ar"] .field-input {
+  line-height: 1.8;
+}
+
+/* --- Layout surfaces ----------------------------------------------------- */
+
+.app-shell {
+  position: relative;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/*
+ * The masthead is a printed rule, not a floating bar: no blur, no shadow, no
+ * translucency. It scrolls away with the page so nothing hovers over the
+ * reading column.
+ */
+.app-header {
+  border-bottom: 1px solid var(--rule);
+}
+
+/* A bordered block of paper. Used once, for the sign-in form. */
+.panel {
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper);
+}
+
+/* A hairline that carries a little brand weight. Marks the top of the list. */
+.rule-accent {
+  height: 2px;
+  border: 0;
+  margin: 0;
+  background: var(--accent);
+}
+
+.section-heading {
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+:root[lang="ar"] .section-heading {
+  font-size: 0.975rem;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  color: var(--accent-text);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.detail-label {
+  color: var(--text-faint);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* --- Buttons ------------------------------------------------------------- */
+
+.primary-button,
+.secondary-button,
+.danger-button,
+.ghost-button {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 2px;
+  padding-inline: 1.15rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  white-space: nowrap;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease,
+    box-shadow 160ms ease, opacity 160ms ease;
+  cursor: pointer;
+}
+
+.primary-button {
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--accent-solid-hover);
+}
+
+.secondary-button {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--text-faint);
+}
+
+.danger-button {
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.danger-button:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.ghost-button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.ghost-button:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.primary-button:active:not(:disabled),
+.secondary-button:active:not(:disabled),
+.danger-button:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.danger-button:disabled,
+.ghost-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.icon-button {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-faint);
+  transition: color 160ms ease;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: var(--text);
+}
+
+.link-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-weight: 550;
+  transition: opacity 160ms ease;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  opacity: 0.75;
+}
+
+/* --- Inputs -------------------------------------------------------------- */
+
+.field-label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.field-input {
+  width: 100%;
+  min-height: 2.9rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  outline: 0;
+  background: var(--surface);
+  padding-inline: 0.85rem;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.field-input::placeholder {
+  color: var(--text-faint);
+}
+
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* Search is a ruled line, not a box — the same hairline vocabulary as the
+   glossary beneath it, so the two read as one page. */
+.search-field {
+  display: flex;
+  min-height: 2.9rem;
+  align-items: center;
+  gap: 0.7rem;
+  border: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  border-radius: 0;
+  background: transparent;
+  transition: border-color 160ms ease;
+}
+
+.search-field:focus-within {
+  border-bottom-color: var(--accent);
+}
+
+.search-field input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 1.0625rem;
+  font-weight: 400;
+}
+
+.search-field input::placeholder {
+  color: var(--text-faint);
+}
+
+.search-field input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.capture-field {
+  display: flex;
+  min-height: 4rem;
+  align-items: center;
+  gap: 0.75rem;
+  border: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  border-radius: 0;
+  background: transparent;
+  padding-inline: 0 0.25rem;
+  transition: border-color 160ms ease;
+}
+
+.capture-field:focus-within,
+.capture-field.is-listening {
+  border-bottom-color: var(--accent);
+}
+
+.capture-field input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: clamp(1.4rem, 4.5vw, 1.8rem);
+  font-weight: 500;
+  letter-spacing: -0.008em;
+}
+
+.capture-field input::placeholder {
+  color: var(--text-faint);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.voice-button {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-faint);
+  transition: color 160ms ease;
+  cursor: pointer;
+}
+
+.voice-button:hover {
+  color: var(--accent-text);
+}
+
+.voice-pulse {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  background: currentColor;
+  animation: listen-pulse 1.3s ease-out infinite;
+}
+
+/* --- Chips, badges, segmented controls ----------------------------------- */
+
+/* ---------------------------------------------------------------------------
+   Filters as a line of type
+   Section navigation in a magazine is a row of words with the current one
+   marked, not a tray of pills. The rule under the active item is the only
+   decoration, and it is the same hairline used everywhere else.
+--------------------------------------------------------------------------- */
+
+.filter-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 1.25rem;
+}
+
+.filter-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  border: 0;
+  border-bottom: 1.5px solid transparent;
+  background: transparent;
+  padding: 0.15rem 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 140ms ease, border-color 140ms ease;
+  cursor: pointer;
+}
+
+.filter-link:hover {
+  color: var(--text);
+}
+
+.filter-link[aria-pressed="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.filter-count {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sort-select {
+  border: 0;
+  background: transparent;
+  padding: 0.15rem 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.sort-select:hover {
+  color: var(--text);
+}
+
+/* Suggestions in the add flow: the one place a discrete, tappable target still
+   earns a border. Squared off, not a pill. */
+.chip {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  background: transparent;
+  padding-inline: 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: border-color 150ms ease, color 150ms ease;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.chip-count {
+  color: var(--text-faint);
+  font-size: 0.6875rem;
+  font-style: italic;
+}
+
+/* Not a badge any more: a dictionary's italic part-of-speech abbreviation. */
+.badge {
+  display: inline;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--text-faint);
+  font-size: 0.8125rem;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.badge-accent {
+  color: var(--accent-text);
+}
+
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  padding: 2px;
+}
+
+.segmented button {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding-inline: 0.65rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  transition: background-color 150ms ease, color 150ms ease;
+  cursor: pointer;
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button[aria-checked="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* --- Stats --------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
+   Colophon
+   The collection's figures set as one line of type rather than a row of tiles.
+   Same information, no dashboard furniture.
+--------------------------------------------------------------------------- */
+
+.colophon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 1.5rem;
+  margin: 0;
+}
+
+.colophon-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.colophon-value {
+  color: var(--text);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.colophon-label {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+.stat-value {
+  color: var(--text);
+  font-size: 1.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  line-height: 1.15;
+}
+
+.stat-label {
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+:root[lang="ar"] .stat-label {
+  font-size: 0.85rem;
+  line-height: 1.7;
+}
+
+/* --- Word cards ---------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
+   The glossary
+   A vocabulary collection is a list, not a grid of cards. Entries are ruled
+   rows: term and its part of speech on the left, the Arabic on the right, the
+   date in the margin — the layout of a printed dictionary. Rows carry no
+   border, radius or shadow of their own; the hairline between them is the
+   only structure, which is what gives the page its rhythm.
+--------------------------------------------------------------------------- */
+
+.glossary {
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--rule);
+  list-style: none;
+}
+
+.word-row {
+  position: relative;
+  border-top: 1px solid var(--rule);
+  animation: row-in 260ms both cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+.word-row-open {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 1.15rem 2.25rem 1.15rem 0;
+  text-align: start;
+  transition: background-color 140ms ease;
+  cursor: pointer;
+}
+
+.word-row:hover .word-row-open,
+.word-row-open:focus-visible {
+  background: var(--row-hover);
+}
+
+@media (min-width: 46rem) {
+  .word-row-open {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) 6.5rem;
+    gap: 1.75rem;
+    padding-inline-end: 2.5rem;
+  }
+}
+
+/* The term, and the sense that follows it, read as one dictionary headword. */
+.word-term {
+  color: var(--text);
+  font-size: clamp(1.3rem, 2.6vw, 1.55rem);
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  transition: color 140ms ease;
+}
+
+.word-row:hover .word-term {
+  color: var(--accent-text);
+}
+
+/* Part of speech, set in italic like a dictionary abbreviation. */
+.word-pos {
+  margin-inline-start: 0.35rem;
+  color: var(--text-faint);
+  font-size: 0.8125rem;
+  font-style: italic;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.word-gloss {
+  color: var(--text-muted);
+  font-size: 1.0625rem;
+  font-weight: 400;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+:root[lang="ar"] .word-gloss,
+.word-gloss[lang="ar"] {
+  font-size: 1.05rem;
+  line-height: 1.9;
+}
+
+.word-date {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.word-card:focus-within {
+  border-color: var(--accent);
+}
+
+.word-title {
+  color: var(--text);
+  font-size: clamp(1.4rem, 3.2vw, 1.7rem);
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  transition: color 180ms ease;
+}
+
+.word-card:hover .word-title {
+  color: var(--accent-text);
+}
+
+.word-meaning {
+  color: var(--text-muted);
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+/* Arabic meanings are the reading target on a card: give them room. */
+:root[lang="ar"] .word-meaning,
+.word-meaning[lang="ar"] {
+  font-size: 1.05rem;
+  line-height: 1.95;
+}
+
+.row-delete {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 50%;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-faint);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: color 140ms ease, opacity 140ms ease;
+  cursor: pointer;
+}
+
+.word-row:hover .row-delete,
+.row-delete:focus-visible {
+  opacity: 1;
+}
+
+.row-delete:hover {
+  color: var(--danger-text);
+}
+
+@media (hover: none) {
+  .row-delete {
+    opacity: 1;
+  }
+}
+
+/* --- Notices ------------------------------------------------------------- */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  border-radius: 9px;
+  padding: 0.7rem 0.8rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.error-notice {
+  border: 1px solid var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.success-notice {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* --- Dialogs ------------------------------------------------------------- */
+
+.dialog-layer {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  background: var(--overlay);
+  padding: 1.25rem;
+  animation: fade-in 150ms both ease;
+}
+
+.dialog-panel {
+  width: 100%;
+  max-width: 42rem;
+  max-height: calc(100dvh - 2.5rem);
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper);
+  padding: clamp(1.4rem, 3.5vw, 2.25rem);
+  box-shadow: var(--shadow-lg);
+  animation: dialog-in 200ms both cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+.add-dialog {
+  max-width: 36rem;
+}
+
+.details-dialog {
+  max-width: 44rem;
+}
+
+.settings-dialog {
+  max-width: 30rem;
+}
+
+.confirm-dialog {
+  max-width: 25rem;
+}
+
+.pronunciation-button {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.45rem;
+  border: 0;
+  border-bottom: 1px solid var(--accent-border);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 0.15rem;
+  color: var(--accent-text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: border-color 150ms ease;
+  cursor: pointer;
+}
+
+.pronunciation-button:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* --- Toast --------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  z-index: 90;
+  inset-inline-end: 1.25rem;
+  bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  display: flex;
+  max-width: min(24rem, calc(100vw - 2.5rem));
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper);
+  padding: 0.7rem 0.9rem;
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  animation: toast-in 220ms both cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+/* --- Skeletons ----------------------------------------------------------- */
+
+.skeleton {
+  border-radius: 6px;
+  background: var(--surface-2);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+/* --- Responsive component overrides -------------------------------------- */
+
+@media (max-width: 640px) {
+  .dialog-layer {
+    align-items: end;
+    padding: 0;
+  }
+
+  .dialog-panel {
+    max-height: 92dvh;
+    border-inline: 0;
+    border-bottom: 0;
+    border-radius: 2px 2px 0 0;
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  }
+
+  .toast {
+    inset-inline: 0.75rem;
+    max-width: none;
+    bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  }
+}
+
+}
+
+/* --- Animations ---------------------------------------------------------- */
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes listen-pulse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
