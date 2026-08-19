@@ -46,8 +46,9 @@ test("server-renders the EBARA preview or configured auth bootstrap", async () =
 });
 
 test("keeps auth, private persistence, and dictionary lookup in the product source", async () => {
-  const [app, route, migration, envExample, readme, packageJson] = await Promise.all([
+  const [app, settings, route, migration, envExample, readme, packageJson, deleteAccount] = await Promise.all([
     readFile(new URL("../app/vocabulary-box.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/SettingsDialog.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/dictionary/route.ts", import.meta.url), "utf8"),
     readFile(
       new URL(
@@ -59,10 +60,18 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/delete-account/index.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(app, /signInWithPassword/);
   assert.match(app, /resetPasswordForEmail/);
+  assert.match(app, /acceptedTerms/);
+  assert.match(app, /functions\.invoke\(["']delete-account["']/);
+  assert.match(app, /ebara-vocabulary-/);
+  assert.match(settings, /settings\.deleteAccount/);
+  assert.match(settings, /settings\.export/);
+  assert.match(deleteAccount, /auth\.admin\.deleteUser\(user\.id\)/);
+  assert.match(deleteAccount, /DELETE_MY_ACCOUNT/);
   assert.match(app, /webkitSpeechRecognition/);
   assert.match(app, /meaning_ar\.includes\(query\)/);
   assert.match(app, /fetch\(["']\/api\/dictionary["']/);
@@ -189,4 +198,15 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   );
   await access(new URL("../supabase/migrations/20260801190000_initial_vocabulary_box.sql", import.meta.url));
   await access(projectRoot);
+});
+
+test("server-renders bilingual legal pages", async () => {
+  for (const pathname of ["/privacy", "/terms"]) {
+    const response = await render(pathname);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /EBARA/);
+    assert.match(html, pathname === "/privacy" ? /Privacy notice/ : /Terms of use/);
+    assert.match(html, /Last updated: 19 August 2026/);
+  }
 });

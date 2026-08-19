@@ -71,13 +71,16 @@ records — useful for reviewing the interface, but nothing is saved.
 
 ## Environment variables
 
-Both are public, browser-exposed values. There are no server-side secrets in
-this project, and no service-role key is used anywhere.
+The four `NEXT_PUBLIC_` values are public and browser-exposed. The account
+deletion Edge Function uses Supabase-managed server secrets; its service-role
+key is never placed in this repository or exposed to the browser.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | For accounts | Supabase project URL, e.g. `https://xxxx.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | For accounts | Supabase anon/publishable key |
+| `NEXT_PUBLIC_LEGAL_OPERATOR_NAME` | Public launch | Legal name of the service operator shown in the legal pages |
+| `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | Public launch | Monitored address for privacy and support requests |
 
 `SUPABASE_URL` and `SUPABASE_ANON_KEY` are accepted as fallbacks for hosts that
 do not forward `NEXT_PUBLIC_` variables.
@@ -88,13 +91,50 @@ commit `.env.local`; `.gitignore` already excludes it.
 ## Database setup
 
 1. Create a Supabase project.
-2. Open the SQL editor and run
-   `supabase/migrations/20260801190000_initial_vocabulary_box.sql`. It creates
+2. Apply every file in `supabase/migrations/` in filename order. They create
    the `profiles` and `words` tables, owner-scoped row-level-security policies,
-   and the search and duplicate-guard indexes.
+   search and duplicate-guard indexes, Arabic definitions, and personal notes.
 3. Under **Authentication → URL Configuration**, add
    `http://localhost:3000` and your deployed URL to the redirect allow list, so
    email confirmation and password recovery links return to the app.
+4. Deploy `supabase/functions/delete-account` with JWT verification enabled.
+   Supabase provides `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
+   `SUPABASE_SERVICE_ROLE_KEY` to the function runtime. Never copy the service
+   role key into a `NEXT_PUBLIC_` variable.
+
+## Public launch checklist
+
+The code includes private account storage, export, account deletion, bilingual
+Terms and Privacy pages, and explicit acceptance during sign-up. Before sharing
+the service with the public, the operator must also complete the hosted-service
+configuration below:
+
+1. **Email delivery:** configure a custom SMTP provider in Supabase Auth. The
+   default sender is intended for development and cannot reliably serve public
+   sign-ups, email confirmation, and password recovery.
+2. **URLs:** set the production Site URL and exact redirect allow-list entries
+   in Supabase Auth. Test confirmation and recovery links on the production
+   domain, not only localhost.
+3. **Abuse protection:** review Auth rate limits and enable CAPTCHA for sign-up,
+   login, and password recovery before advertising the service broadly. Enable
+   leaked-password protection under Auth password security as well; the current
+   project advisor reports that protection as disabled.
+4. **Legal identity:** set a real operator name and a monitored privacy email in
+   the two legal environment variables. The included legal text is a practical
+   launch draft, not legal advice; have it reviewed for the intended audience.
+5. **International processing:** the current Supabase database is in Tokyo,
+   Japan. A Saudi public launch should document and assess the applicable
+   safeguards for transferring personal data outside the Kingdom before launch.
+6. **Reliability:** choose a Supabase plan and backup policy appropriate for the
+   number of users. Free projects can pause after inactivity and should not be
+   treated as a guaranteed production service.
+7. **End-to-end QA:** create a test account through the public URL, confirm its
+   email, add and edit a word, log out and back in on another device, export the
+   library, reset the password, and finally delete the test account.
+
+Official references: the [Supabase production checklist](https://supabase.com/docs/guides/deployment/going-into-prod),
+[custom SMTP guide](https://supabase.com/docs/guides/auth/auth-smtp), and the
+[Saudi Personal Data Protection Law implementing regulations](https://www.uqn.gov.sa/details?p=23595).
 
 ## Scripts
 

@@ -1,6 +1,7 @@
 "use client";
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
+import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
@@ -356,6 +357,52 @@ export default function Ebara({
     setWords([]);
   }
 
+  function handleExportData() {
+    const exportPayload = {
+      service: "EBARA",
+      exported_at: new Date().toISOString(),
+      account_email: session?.user.email ?? null,
+      storage: guestMode ? "this device" : "Supabase account",
+      words: words.map((entry) =>
+        Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "user_id")),
+      ),
+    };
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `ebara-vocabulary-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleClearGuest() {
+    window.localStorage.removeItem(GUEST_WORDS_STORAGE_KEY);
+    setWords([]);
+    setSelectedWord(null);
+    setWordToDelete(null);
+    setSettingsOpen(false);
+  }
+
+  async function handleDeleteAccount() {
+    if (!supabase || !session) throw new Error("A signed-in account is required.");
+
+    const { error } = await supabase.functions.invoke("delete-account", {
+      body: { confirmation: "DELETE_MY_ACCOUNT" },
+    });
+    if (error) throw error;
+
+    await supabase.auth.signOut({ scope: "local" });
+    setWords([]);
+    setSelectedWord(null);
+    setWordToDelete(null);
+    setSettingsOpen(false);
+  }
+
   function continueAsGuest() {
     let storedWords: WordRecord[] = [];
     try {
@@ -590,12 +637,16 @@ export default function Ebara({
       </section>
 
       <footer
-        className="type-caption mx-auto max-w-[1180px] border-t px-4 py-7 sm:px-8"
+        className="type-caption mx-auto flex max-w-[1180px] flex-col gap-4 border-t px-4 py-7 sm:flex-row sm:items-start sm:justify-between sm:px-8"
         style={{ borderColor: "var(--border)", color: "var(--text-faint)" }}
       >
         <p className="max-w-2xl">
           <FooterCredit t={t} />
         </p>
+        <nav className="flex shrink-0 gap-4">
+          <Link className="link-button" href="/terms">{t("legal.terms")}</Link>
+          <Link className="link-button" href="/privacy">{t("legal.privacy")}</Link>
+        </nav>
       </footer>
 
       {addOpen && (
@@ -631,6 +682,9 @@ export default function Ebara({
           accountEmail={session?.user.email}
           guestMode={guestMode}
           demoMode={demoMode}
+          onExport={handleExportData}
+          onClearGuest={handleClearGuest}
+          onDeleteAccount={handleDeleteAccount}
         />
       )}
 
@@ -725,6 +779,7 @@ function AuthScreen({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -740,6 +795,7 @@ function AuthScreen({
     setMessage(null);
     setPassword("");
     setConfirmPassword("");
+    setAcceptedTerms(false);
     onModeChange(nextMode);
   }
 
@@ -754,6 +810,7 @@ function AuthScreen({
         const { error: signInError } = await client.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
       } else if (mode === "signup") {
+        if (!acceptedTerms) throw new Error(t("auth.errAcceptTerms"));
         const { error: signUpError } = await client.auth.signUp({ email, password });
         if (signUpError) throw signUpError;
         setMessage(t("auth.checkInbox"));
@@ -903,6 +960,29 @@ function AuthScreen({
                 </div>
               )}
 
+              {mode === "signup" && (
+                <label className="flex cursor-pointer items-start gap-2.5 type-caption" style={{ color: "var(--text-muted)" }}>
+                  <input
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(event) => setAcceptedTerms(event.target.checked)}
+                    className="mt-1 size-4 shrink-0"
+                    style={{ accentColor: "var(--accent)" }}
+                    required
+                  />
+                  <span>
+                    {t("auth.agreePrefix")} {" "}
+                    <Link className="link-button" href="/terms" target="_blank">
+                      {t("legal.terms")}
+                    </Link>{" "}
+                    {t("auth.agreeAnd")} {" "}
+                    <Link className="link-button" href="/privacy" target="_blank">
+                      {t("legal.privacy")}
+                    </Link>
+                  </span>
+                </label>
+              )}
+
               {error && (
                 <div className="notice error-notice" role="alert">
                   <CircleAlert size={15} className="mt-px shrink-0" aria-hidden="true" />
@@ -966,6 +1046,12 @@ function AuthScreen({
                 {t("auth.backToLogin")}
               </button>
             )}
+
+            <p className="type-caption mt-6 text-center" style={{ color: "var(--text-faint)" }}>
+              <Link className="link-button" href="/terms">{t("legal.terms")}</Link>
+              <span aria-hidden="true"> · </span>
+              <Link className="link-button" href="/privacy">{t("legal.privacy")}</Link>
+            </p>
           </div>
         </div>
       </div>
