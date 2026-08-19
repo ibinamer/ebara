@@ -12,7 +12,7 @@ import type { CollectionStats } from "@/lib/words";
  * collection instead of a control panel above it.
  *
  * Every figure is still derived from stored columns only — `created_at` for the
- * weekly count and streak, `part_of_speech` for the type count.
+ * weekly count and streak.
  */
 export function DashboardStats({ stats }: { stats: CollectionStats }) {
   const { t, locale } = useI18n();
@@ -21,7 +21,6 @@ export function DashboardStats({ stats }: { stats: CollectionStats }) {
     { key: "stats.total", value: stats.total },
     { key: "stats.week", value: stats.addedThisWeek },
     { key: "stats.streak", value: stats.streakDays, hint: "stats.streakHint" },
-    { key: "stats.types", value: stats.typeCount },
   ];
 
   return (

@@ -18,7 +18,7 @@ games, streaks, chat, or other learning-platform features.
 - Arabic dictionary meanings from Wiktionary through the MediaWiki Action API
 - Permanent Supabase storage for every completed word record
 - Full English and Arabic interface with automatic LTR/RTL switching
-- Light, dark, and system themes, each tuned separately rather than inverted
+- A single fixed light theme; there is no dark mode
 - Dashboard figures derived from stored columns: total words, words added in the
   last seven days, current daily streak, and the number of word types
 - Word-type filters and newest/oldest/alphabetical sorting
@@ -158,7 +158,7 @@ drives most of the interface:
 - **Search is a ruled line**, sharing the hairline vocabulary of the list below
   so the two read as one page. Focus thickens that rule instead of drawing a box
   around the field.
-- **Orange is punctuation.** It appears three times: the primary action, the
+- **Blue is punctuation.** It appears three times: the primary action, the
   active filter, and the rule marking where the glossary begins. Everywhere else
   the page is ink on paper.
 
@@ -166,7 +166,7 @@ Corners are 2px, surfaces are flat, and there are no gradients. The only
 shadows left are on the two elements that genuinely float — the modal and the
 toast.
 
-## Interface language and theme
+## Interface language
 
 The language switch (English or العربية) changes interface text only; stored
 vocabulary is never rewritten. Selecting Arabic flips the document to RTL,
@@ -179,10 +179,13 @@ English: conversational where the app addresses the learner ("وش تعلمت ا
 messages stay clear and professional. The learner's collection is always
 "مكتبتك".
 
-Both the language and the theme are stored in `localStorage` under
-`ebara:locale` and `ebara:theme`, and a small script in the document head
-applies them before first paint so the page never flashes the wrong palette or
-direction.
+The language is stored in `localStorage` under `ebara:locale`, and a small
+script in the document head applies it before first paint so the page never
+flashes the wrong direction.
+
+There is a single fixed light theme — no dark mode, no theme toggle, and no
+`prefers-color-scheme` branching. `color-scheme: light` is set unconditionally
+in `app/globals.css`.
 
 ## Words and phrases
 
@@ -267,7 +270,6 @@ inventing them would show the learner numbers that are not real.
   search, saving, and the add-word capture flow
 - `app/components/` — presentational, reusable pieces shared across screens
 - `lib/i18n.tsx` — locale provider, English and Arabic dictionaries, formatting
-- `lib/theme.tsx` — theme provider resolving light, dark, and system
 - `lib/words.ts` — the word record type and derived collection statistics
 - `app/globals.css` — design tokens, the type scale, and component classes
 - `app/fonts.css` — self-hosted `@font-face` declarations

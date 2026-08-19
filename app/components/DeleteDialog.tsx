@@ -34,7 +34,7 @@ export function DeleteDialog({
       dismissible={!isDeleting}
     >
       <span
-        className="grid size-10 place-items-center rounded-[10px]"
+        className="grid size-10 place-items-center rounded-xl"
         style={{ background: "var(--danger-soft)", color: "var(--danger-text)" }}
       >
         <Trash2 size={18} aria-hidden="true" />

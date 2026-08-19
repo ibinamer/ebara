@@ -11,16 +11,16 @@ import {
   LockKeyhole,
   LogOut,
   Mic,
-  Moon,
   Plus,
   Search,
   Settings,
-  Sun,
   X,
 } from "lucide-react";
 import {
   FormEvent,
   KeyboardEvent,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -39,18 +39,24 @@ import { WordDetailsDialog } from "./components/WordDetailsDialog";
 import { WordFacts, WordHeadline } from "./components/WordFacts";
 import { StatsSkeleton, WordGridSkeleton } from "./components/Skeletons";
 import { useI18n, type Translate } from "@/lib/i18n";
-import { capitalize, normalizeCandidate } from "@/lib/speech";
+import { capitalize, normalizeCandidate, sanitizeLiveInput } from "@/lib/speech";
 import { createVocabularyClient } from "@/lib/supabase";
-import { useTheme } from "@/lib/theme";
 import {
   calculateStats,
-  countWordTypes,
-  normalizeType,
   sortWords,
   type DictionaryEntry,
   type SortOrder,
   type WordRecord,
 } from "@/lib/words";
+
+/*
+ * The demo, and the animation engine behind it, live only on the sign-in
+ * screen. Splitting it out keeps that weight off the signed-in app, which is
+ * where people actually spend their time and which never renders it.
+ */
+const ProductDemo = lazy(() =>
+  import("./components/ProductDemo").then((module) => ({ default: module.ProductDemo })),
+);
 
 type AuthMode = "login" | "signup" | "forgot" | "update";
 type AddStep = "capture" | "review";
@@ -86,10 +92,12 @@ const DEMO_WORDS: WordRecord[] = [
     word: "perseverance",
     meaning_ar: "المثابرة",
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
+    definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
-    example_sentence: "Her perseverance helped her finish the difficult project.",
+    example_sentence: "",
+    notes: "",
     created_at: "2026-08-01T14:42:00.000Z",
   },
   {
@@ -98,10 +106,12 @@ const DEMO_WORDS: WordRecord[] = [
     word: "serendipity",
     meaning_ar: "صدفة سعيدة",
     definition_en: "The pleasant discovery of something valuable or interesting by chance.",
+    definition_ar: "الاكتشاف السار لشيء قيّم أو مثير للاهتمام بالصدفة.",
     pronunciation: "ser-uhn-DIP-uh-tee",
     ipa: "/ˌser.ənˈdɪp.ə.ti/",
     part_of_speech: "noun",
-    example_sentence: "Finding that quiet bookshop was pure serendipity.",
+    example_sentence: "",
+    notes: "Heard this in a podcast about scientific discoveries.",
     created_at: "2026-07-31T14:16:00.000Z",
   },
   {
@@ -110,10 +120,12 @@ const DEMO_WORDS: WordRecord[] = [
     word: "subtle",
     meaning_ar: "دقيق، غير واضح",
     definition_en: "So delicate or precise that it is difficult to notice or describe.",
+    definition_ar: "دقيق أو خفي لدرجة يصعب معها ملاحظته أو وصفه.",
     pronunciation: "SUHT-l",
     ipa: "/ˈsʌt.əl/",
     part_of_speech: "adjective",
-    example_sentence: "The room had a subtle scent of cedar.",
+    example_sentence: "",
+    notes: "",
     created_at: "2026-07-29T11:05:00.000Z",
   },
   {
@@ -122,10 +134,12 @@ const DEMO_WORDS: WordRecord[] = [
     word: "gentle",
     meaning_ar: "لطيف، رقيق",
     definition_en: "Kind, calm, or soft in manner or effect.",
+    definition_ar: "لطيف أو هادئ أو ناعم في الطريقة أو التأثير.",
     pronunciation: "JEN-tl",
     ipa: "/ˈdʒen.təl/",
     part_of_speech: "adjective",
-    example_sentence: "She gave the door a gentle push.",
+    example_sentence: "",
+    notes: "",
     created_at: "2026-07-25T12:31:00.000Z",
   },
 ];
@@ -135,28 +149,31 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
     word: "perseverance",
     meaning_ar: "المثابرة",
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
+    definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
-    example_sentence: "Her perseverance helped her finish the difficult project.",
+    example_sentence: "",
   },
   perserverance: {
     word: "perseverance",
     meaning_ar: "المثابرة",
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
+    definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
-    example_sentence: "Her perseverance helped her finish the difficult project.",
+    example_sentence: "",
   },
   curious: {
     word: "curious",
     meaning_ar: "فضولي",
     definition_en: "Eager to know or learn something.",
+    definition_ar: "متحمس لمعرفة أو تعلم شيء ما.",
     pronunciation: "KYOOR-ee-uhs",
     ipa: "/ˈkjʊə.ri.əs/",
     part_of_speech: "adjective",
-    example_sentence: "The curious child asked another question.",
+    example_sentence: "",
   },
 };
 
@@ -176,6 +193,7 @@ function fallbackDictionaryEntry(value: string): DictionaryEntry {
     word: normalized,
     meaning_ar: "معنى تجريبي",
     definition_en: "Dictionary details are available after the live services are connected.",
+    definition_ar: "تفاصيل القاموس متاحة بعد الاتصال بالخدمات الفعلية.",
     pronunciation: "",
     ipa: "",
     part_of_speech: normalized.includes(" ") ? "phrase" : "word",
@@ -184,42 +202,26 @@ function fallbackDictionaryEntry(value: string): DictionaryEntry {
 }
 
 /**
- * Compact language + theme switches, used only before sign-in. Inside the app
- * both live in Settings, but the auth screen has no Settings dialog — dropping
- * them here would leave an Arabic reader no way to switch language until after
- * they had already signed in.
+ * Compact language switch, used only before sign-in. Inside the app it lives
+ * in Settings, but the auth screen has no Settings dialog — dropping it here
+ * would leave an Arabic reader no way to switch language until after they had
+ * already signed in.
  */
 function QuickControls() {
   const { t, locale, setLocale } = useI18n();
-  const { resolved, setPreference } = useTheme();
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setLocale(locale === "en" ? "ar" : "en")}
-        className="icon-button"
-        aria-label={t("settings.language")}
-        title={t("settings.language")}
-      >
-        <span className="text-[11px] font-bold leading-none">
-          {locale === "en" ? "ع" : "EN"}
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => setPreference(resolved === "dark" ? "light" : "dark")}
-        className="icon-button"
-        aria-label={t("settings.theme")}
-        title={t("settings.theme")}
-      >
-        {resolved === "dark" ? (
-          <Sun size={16} aria-hidden="true" />
-        ) : (
-          <Moon size={16} aria-hidden="true" />
-        )}
-      </button>
-    </>
+    <button
+      type="button"
+      onClick={() => setLocale(locale === "en" ? "ar" : "en")}
+      className="icon-button"
+      aria-label={t("settings.language")}
+      title={t("settings.language")}
+    >
+      <span className="text-[11px] font-bold leading-none">
+        {locale === "en" ? "ع" : "EN"}
+      </span>
+    </button>
   );
 }
 
@@ -243,7 +245,6 @@ export default function Ebara({
   const [words, setWords] = useState<WordRecord[]>(demoMode ? DEMO_WORDS : []);
   const [isLoadingWords, setIsLoadingWords] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedType, setSelectedType] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
   const [selectedWord, setSelectedWord] = useState<WordRecord | null>(null);
   const [wordToDelete, setWordToDelete] = useState<WordRecord | null>(null);
@@ -257,7 +258,7 @@ export default function Ebara({
     const { data, error } = await supabase
       .from("words")
       .select(
-        "id,user_id,word,meaning_ar,definition_en,pronunciation,ipa,part_of_speech,example_sentence,created_at",
+        "id,user_id,word,meaning_ar,definition_en,definition_ar,pronunciation,ipa,part_of_speech,example_sentence,notes,created_at",
       )
       .order("created_at", { ascending: false });
 
@@ -323,14 +324,7 @@ export default function Ebara({
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  const wordTypes = useMemo(() => countWordTypes(words), [words]);
   const stats = useMemo(() => calculateStats(words), [words]);
-
-  // Derived, so deleting the last word of a type cannot strand the filter.
-  const activeType =
-    selectedType && wordTypes.some((item) => item.type === selectedType)
-      ? selectedType
-      : null;
 
   const filteredWords = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
@@ -344,14 +338,8 @@ export default function Ebara({
       );
     }
 
-    if (activeType) {
-      result = result.filter(
-        (entry) => normalizeType(entry.part_of_speech) === activeType,
-      );
-    }
-
     return sortWords(result, sortOrder);
-  }, [activeType, searchQuery, sortOrder, words]);
+  }, [searchQuery, sortOrder, words]);
 
   async function handleLogout() {
     if (guestMode) {
@@ -389,6 +377,7 @@ export default function Ebara({
     if (demoMode || !supabase || !session) {
       const previewWord: WordRecord = {
         ...dictionaryEntry,
+        notes: "",
         id: `demo-${Date.now()}`,
         user_id: guestMode ? "guest-user" : "demo-user",
         created_at: new Date().toISOString(),
@@ -405,10 +394,12 @@ export default function Ebara({
         word: dictionaryEntry.word,
         meaning_ar: dictionaryEntry.meaning_ar,
         definition_en: dictionaryEntry.definition_en,
+        definition_ar: dictionaryEntry.definition_ar,
         pronunciation: dictionaryEntry.pronunciation,
         ipa: dictionaryEntry.ipa,
         part_of_speech: dictionaryEntry.part_of_speech,
         example_sentence: dictionaryEntry.example_sentence,
+        notes: "",
       })
       .select()
       .single();
@@ -420,6 +411,22 @@ export default function Ebara({
 
     setWords((current) => [data as WordRecord, ...current]);
     setToast(t("toast.saved", { word: capitalize(dictionaryEntry.word) }));
+  }
+
+  async function handleUpdateNotes(id: string, notes: string) {
+    const trimmed = notes.trim();
+
+    if (!demoMode && supabase && session) {
+      const { error } = await supabase.from("words").update({ notes: trimmed }).eq("id", id);
+      if (error) throw new Error(error.message || t("word.notesSaveError"));
+    }
+
+    setWords((current) =>
+      current.map((entry) => (entry.id === id ? { ...entry, notes: trimmed } : entry)),
+    );
+    setSelectedWord((current) =>
+      current && current.id === id ? { ...current, notes: trimmed } : current,
+    );
   }
 
   async function handleDelete() {
@@ -453,11 +460,7 @@ export default function Ebara({
     );
   }
 
-  const emptyKind: EmptyKind = !words.length
-    ? "empty"
-    : searchQuery.trim()
-      ? "no-results"
-      : "no-filter-match";
+  const emptyKind: EmptyKind = words.length ? "no-results" : "empty";
 
   return (
     <main className="app-shell">
@@ -557,42 +560,33 @@ export default function Ebara({
 
         {words.length > 0 && (
           <div className="mt-7">
-            <Filters
-              types={wordTypes}
-              activeType={activeType}
-              onTypeChange={setSelectedType}
-              sort={sortOrder}
-              onSortChange={setSortOrder}
-              totalCount={words.length}
-            />
+            <Filters sort={sortOrder} onSortChange={setSortOrder} />
           </div>
         )}
 
-        {/* The one weighted rule on the page: where the glossary begins. */}
-        <hr className="rule-accent mt-3" />
-
-        {isLoadingWords ? (
-          <WordGridSkeleton />
-        ) : filteredWords.length ? (
-          <ul className="glossary">
-            {filteredWords.map((entry, index) => (
-              <WordRow
-                key={entry.id}
-                entry={entry}
-                index={index}
-                onOpen={() => setSelectedWord(entry)}
-                onDelete={() => setWordToDelete(entry)}
-              />
-            ))}
-          </ul>
-        ) : (
-          <EmptyState
-            kind={emptyKind}
-            query={searchQuery}
-            onAdd={() => setAddOpen(true)}
-            onClearFilter={() => setSelectedType(null)}
-          />
-        )}
+        <div className="list-panel mt-7">
+          {isLoadingWords ? (
+            <WordGridSkeleton />
+          ) : filteredWords.length ? (
+            <ul className="glossary">
+              {filteredWords.map((entry, index) => (
+                <WordRow
+                  key={entry.id}
+                  entry={entry}
+                  index={index}
+                  onOpen={() => setSelectedWord(entry)}
+                  onDelete={() => setWordToDelete(entry)}
+                />
+              ))}
+            </ul>
+          ) : (
+            <EmptyState
+              kind={emptyKind}
+              query={searchQuery}
+              onAdd={() => setAddOpen(true)}
+            />
+          )}
+        </div>
       </section>
 
       <footer
@@ -619,6 +613,7 @@ export default function Ebara({
           entry={selectedWord}
           onClose={() => setSelectedWord(null)}
           onDelete={() => setWordToDelete(selectedWord)}
+          onSaveNotes={(notes) => handleUpdateNotes(selectedWord.id, notes)}
         />
       )}
 
@@ -820,6 +815,20 @@ function AuthScreen({
             >
               {t("auth.heroSubtitle")}
             </p>
+
+            <div className="mt-9">
+              {/* The fallback reserves the stage's exact box, so the column
+                  never reflows when the chunk arrives. */}
+              <Suspense
+                fallback={
+                  <div className="demo-figure">
+                    <div className="demo-stage" />
+                  </div>
+                }
+              >
+                <ProductDemo />
+              </Suspense>
+            </div>
           </div>
 
           <div className="panel w-full max-w-[27rem] justify-self-start p-6 sm:p-7 lg:justify-self-end">
@@ -1183,7 +1192,7 @@ function AddWordDialog({
               dir="ltr"
               value={draft}
               onChange={(event) => {
-                setDraft(normalizeCandidate(event.target.value));
+                setDraft(sanitizeLiveInput(event.target.value));
                 setVoiceAlternatives([]);
                 setError(null);
               }}

@@ -2,12 +2,19 @@ export type WordRecord = {
   id: string;
   user_id: string;
   word: string;
+  /** Short headword-level gloss, e.g. "بكاء". */
   meaning_ar: string;
   definition_en: string;
+  /** Full Arabic translation of definition_en — distinct from meaning_ar. */
+  definition_ar: string;
   pronunciation: string;
   ipa: string;
   part_of_speech: string;
   example_sentence: string;
+  /** Free-text personal note the learner writes themselves, e.g. where they
+   *  heard the word. Not part of the dictionary lookup — added or edited
+   *  independently, any time after a word is saved. */
+  notes: string;
   created_at: string;
 };
 
@@ -16,6 +23,7 @@ export type DictionaryEntry = Pick<
   | "word"
   | "meaning_ar"
   | "definition_en"
+  | "definition_ar"
   | "pronunciation"
   | "ipa"
   | "part_of_speech"
@@ -24,13 +32,10 @@ export type DictionaryEntry = Pick<
 
 export type SortOrder = "newest" | "oldest" | "alphabetical";
 
-export type WordTypeCount = { type: string; count: number };
-
 export type CollectionStats = {
   total: number;
   addedThisWeek: number;
   streakDays: number;
-  typeCount: number;
 };
 
 /** Local calendar day key, so streaks follow the learner's own timezone. */
@@ -79,29 +84,11 @@ export function countAddedSince(words: WordRecord[], days: number, now = new Dat
   }).length;
 }
 
-export function normalizeType(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-/** Word types come straight from the stored `part_of_speech` column. */
-export function countWordTypes(words: WordRecord[]): WordTypeCount[] {
-  const counts = new Map<string, number>();
-  for (const entry of words) {
-    const type = normalizeType(entry.part_of_speech);
-    if (!type) continue;
-    counts.set(type, (counts.get(type) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([type, count]) => ({ type, count }))
-    .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
-}
-
 export function calculateStats(words: WordRecord[], now = new Date()): CollectionStats {
   return {
     total: words.length,
     addedThisWeek: countAddedSince(words, 7, now),
     streakDays: calculateStreak(words, now),
-    typeCount: countWordTypes(words).length,
   };
 }
 

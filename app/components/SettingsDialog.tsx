@@ -1,9 +1,7 @@
 "use client";
 
-import { Monitor, Moon, Sun } from "lucide-react";
 import { Dialog, DialogClose } from "./Dialog";
 import { useI18n, type Locale } from "@/lib/i18n";
-import { useTheme, type ThemePreference } from "@/lib/theme";
 
 const LOCALES: { value: Locale; label: string }[] = [
   { value: "en", label: "English" },
@@ -22,13 +20,6 @@ export function SettingsDialog({
   demoMode: boolean;
 }) {
   const { t, locale, setLocale } = useI18n();
-  const { preference, setPreference } = useTheme();
-
-  const themes: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
-    { value: "light", label: t("settings.themeLight"), icon: Sun },
-    { value: "dark", label: t("settings.themeDark"), icon: Moon },
-    { value: "system", label: t("settings.themeSystem"), icon: Monitor },
-  ];
 
   return (
     <Dialog onClose={onClose} labelledBy="settings-title" className="settings-dialog">
@@ -49,29 +40,6 @@ export function SettingsDialog({
       </div>
 
       <section className="mt-7">
-        <p className="detail-label">{t("settings.theme")}</p>
-        <div
-          className="segmented mt-3 w-full"
-          role="radiogroup"
-          aria-label={t("settings.theme")}
-        >
-          {themes.map(({ value, label, icon: Icon }) => (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={preference === value}
-              onClick={() => setPreference(value)}
-              className="flex-1"
-            >
-              <Icon size={14} aria-hidden="true" />
-              {label}
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="mt-6">
         <p className="detail-label">{t("settings.language")}</p>
         <div
           className="segmented mt-3 w-full"

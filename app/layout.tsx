@@ -7,15 +7,12 @@ import { Providers } from "./providers";
 // app/fonts.css — see the note there for why `next/font` is not used.
 
 /**
- * Applies the stored theme and language to <html> before first paint so the
- * page never flashes the wrong palette or text direction.
+ * Applies the stored language to <html> before first paint so the page never
+ * flashes the wrong text direction. The site has a single fixed light theme,
+ * so there is nothing to bootstrap for colour scheme.
  */
 const BOOTSTRAP_SCRIPT = `(function(){try{
 var e=document.documentElement;
-var t=localStorage.getItem("ebara:theme")||"system";
-var d=t==="dark"||(t==="system"&&window.matchMedia("(prefers-color-scheme: dark)").matches);
-e.setAttribute("data-theme",d?"dark":"light");
-e.style.colorScheme=d?"dark":"light";
 var l=localStorage.getItem("ebara:locale")==="ar"?"ar":"en";
 e.setAttribute("lang",l);
 e.setAttribute("dir",l==="ar"?"rtl":"ltr");
@@ -74,17 +71,14 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#faf8f6" },
-    { media: "(prefers-color-scheme: dark)", color: "#14100e" },
-  ],
+  themeColor: "#faf7f2",
   width: "device-width",
   initialScale: 1,
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" dir="ltr" data-theme="dark" suppressHydrationWarning>
+    <html lang="en" dir="ltr" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOTSTRAP_SCRIPT }} />
       </head>

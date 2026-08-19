@@ -4,8 +4,8 @@
   "description": "A quiet, private home for English words, dictionary details, and Arabic meanings.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#14100e",
-  "theme_color": "#14100e",
+  "background_color": "#faf7f2",
+  "theme_color": "#faf7f2",
   "icons": [
     {
       "src": "/favicon.svg",

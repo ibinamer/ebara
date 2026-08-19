@@ -15,9 +15,11 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /**
- * The shared vocabulary read-out: pronunciation, IPA, Arabic meaning,
- * definition and example. Used by both the detail dialog and the add-word
- * review step so a word always looks the same wherever it appears.
+ * The shared vocabulary read-out: pronunciation, IPA, the short Arabic
+ * meaning (a headword-level gloss, e.g. "بكاء"), and the definition set in
+ * both languages — the English original from the dictionary, and its Arabic
+ * translation directly beneath it. Used by both the detail dialog and the
+ * add-word review step so a word always looks the same wherever it appears.
  */
 export function WordFacts({ entry }: { entry: DictionaryEntry }) {
   const { t } = useI18n();
@@ -77,19 +79,17 @@ export function WordFacts({ entry }: { entry: DictionaryEntry }) {
         >
           {entry.definition_en}
         </p>
-      </Row>
-
-      {entry.example_sentence && (
-        <Row label={t("word.example")}>
+        {entry.definition_ar && (
           <p
-            dir="ltr"
-            className="force-ltr type-body max-w-2xl border-l-2 pl-4 italic"
-            style={{ borderColor: "var(--accent-border)", color: "var(--text-muted)" }}
+            lang="ar"
+            dir="rtl"
+            className="bidi-isolate text-ui-start type-body mt-2.5 max-w-2xl"
+            style={{ color: "var(--text-muted)" }}
           >
-            {entry.example_sentence}
+            {entry.definition_ar}
           </p>
-        </Row>
-      )}
+        )}
+      </Row>
     </div>
   );
 }

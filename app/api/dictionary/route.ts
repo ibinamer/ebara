@@ -13,6 +13,15 @@ const MAX_WORD_LENGTH = 80;
 const MAX_UPSTREAM_BYTES = 1_500_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 const AUTH_TIMEOUT_MS = 8_000;
+// Every outbound call below is a single-shot request to a third-party service
+// EBARA does not control. A transient blip there (a 5xx, a dropped
+// connection, a slow response) used to fail the whole lookup outright, which
+// is what made ordinary words intermittently "not translate" — retrying the
+// same request once, after a short pause, clears the vast majority of these
+// without meaningfully slowing down the common case where the first attempt
+// just works.
+const FETCH_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 350;
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
 const MAX_RATE_BUCKETS = 2_000;
@@ -35,8 +44,14 @@ function isMultiWordTerm(value: string): boolean {
 
 export type DictionaryResult = {
   word: string;
+  // A short headword-level gloss (e.g. "بكاء"), sourced from Wiktionary's own
+  // translation tables when it has one, machine-translated as a fallback.
   meaning_ar: string;
   definition_en: string;
+  // A full Arabic translation of definition_en itself — a distinct field
+  // from meaning_ar, always machine-translated since no dictionary source
+  // publishes ready-made definition translations.
+  definition_ar: string;
   pronunciation: string;
   ipa: string;
   part_of_speech: string;
@@ -116,7 +131,7 @@ type LookupFailure = {
 type LookupSuccess<T> = { ok: true; data: T };
 type LookupDecision<T> = LookupSuccess<T> | LookupFailure;
 
-type EnglishDictionaryData = Omit<DictionaryResult, "meaning_ar">;
+type EnglishDictionaryData = Omit<DictionaryResult, "meaning_ar" | "definition_ar">;
 
 type TranslationBox = {
   gloss: string;
@@ -238,11 +253,15 @@ export async function POST(request: Request): Promise<Response> {
   if (english.ok) {
     englishData = english.data;
   } else {
-    // The Free Dictionary API is organised around single words and has no entry
-    // for some ordinary set phrases. Wiktionary does, and its wikitext is
-    // already in hand, so read the sense from there before giving up.
+    // Wiktionary was already fetched in parallel and is a fully independent
+    // source, so its wikitext can rescue this lookup no matter *why* Free
+    // Dictionary failed — a clean 404 (it has no entry for some ordinary set
+    // phrases), or a transient timeout/5xx that had nothing to do with the
+    // word itself. Gating this to 404 only used to mean a Free Dictionary
+    // blip failed the whole lookup even when Wiktionary had the word right
+    // there.
     const fromWiktionary =
-      english.code === "DICTIONARY_NOT_FOUND" && mainWikitext.ok && mainWikitext.data
+      mainWikitext.ok && mainWikitext.data
         ? parseWiktionaryDefinition(mainWikitext.data, word)
         : null;
     if (!fromWiktionary) return lookupErrorResponse(english, rate);
@@ -256,38 +275,43 @@ export async function POST(request: Request): Promise<Response> {
     englishData = { ...englishData, part_of_speech: "phrase" };
   }
 
+  // meaning_ar: a short headword-level gloss. Wiktionary's own translation
+  // tables give a real, curated dictionary answer when they have one; only
+  // fall back to machine-translating the bare word when they don't.
   let meaningAr = mainWikitext.ok
     ? findArabicMeaning(mainWikitext.data, englishData.definition_en)
     : null;
 
   if (!meaningAr) {
-    // Large Wiktionary entries sometimes move translation tables to a dedicated
-    // subpage. This is still a direct dictionary lookup, not machine translation.
+    // Large Wiktionary entries sometimes move translation tables to a
+    // dedicated subpage. This is still a direct dictionary lookup, not
+    // machine translation.
     const translationSubpage = await fetchWiktionaryWikitext(`${englishData.word}/translations`);
     if (translationSubpage.ok) {
-      meaningAr = findArabicMeaning(
-        translationSubpage.data,
-        englishData.definition_en,
-      );
+      meaningAr = findArabicMeaning(translationSubpage.data, englishData.definition_en);
     }
   }
 
-  if (!meaningAr) {
-    const googleTranslated = await fetchGoogleArabicTranslation(
-      englishData.word,
-      englishData.part_of_speech,
-    );
-    if (googleTranslated.ok) {
-      meaningAr = googleTranslated.data;
-    } else {
-      const translated = await fetchArabicTranslation(
-        englishData.word,
-        englishData.part_of_speech,
+  // definition_ar is a different field entirely: a full Arabic translation
+  // of the definition sentence, not a short gloss. No dictionary source
+  // publishes ready-made definition translations, so this is always machine
+  // translation. It runs alongside whichever meaning_ar step is still
+  // outstanding rather than after it, since the two are independent.
+  const shortMeaningPromise: Promise<LookupDecision<string>> = meaningAr
+    ? Promise.resolve({ ok: true as const, data: meaningAr })
+    : translateToArabic(
+        englishData.part_of_speech.toLocaleLowerCase("en").includes("noun")
+          ? `a ${englishData.word}`
+          : englishData.word,
       );
-      if (!translated.ok) return lookupErrorResponse(translated, rate);
-      meaningAr = translated.data;
-    }
-  }
+
+  const [meaningDecision, definitionDecision] = await Promise.all([
+    shortMeaningPromise,
+    translateToArabic(englishData.definition_en),
+  ]);
+
+  if (!meaningDecision.ok) return lookupErrorResponse(meaningDecision, rate);
+  if (!definitionDecision.ok) return lookupErrorResponse(definitionDecision, rate);
 
   return Response.json(
     {
@@ -295,41 +319,40 @@ export async function POST(request: Request): Promise<Response> {
       cached: false,
       data: {
         ...englishData,
-        meaning_ar: meaningAr,
+        meaning_ar: meaningDecision.data,
+        definition_ar: definitionDecision.data,
       } satisfies DictionaryResult,
     },
     { status: 200, headers: responseHeaders(rate) },
   );
 }
 
+/** Tries Google's translation endpoint first, MyMemory as the fallback. */
+async function translateToArabic(text: string): Promise<LookupDecision<string>> {
+  const google = await fetchGoogleArabicTranslation(text);
+  if (google.ok) return google;
+  return fetchArabicTranslation(text);
+}
+
 async function fetchGoogleArabicTranslation(
-  word: string,
-  partOfSpeech: string,
+  text: string,
 ): Promise<LookupDecision<string>> {
   const url = new URL(GOOGLE_TRANSLATE_PUBLIC_URL);
-  const sourceText = partOfSpeech.toLocaleLowerCase("en").includes("noun")
-    ? `a ${word}`
-    : word;
   url.searchParams.set("client", "gtx");
   url.searchParams.set("sl", "en");
   url.searchParams.set("tl", "ar");
   url.searchParams.set("dt", "t");
-  url.searchParams.set("q", sourceText);
+  url.searchParams.set("q", text);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetch(url, { signal: controller.signal });
-  } catch {
+  const attempt = await fetchWithRetry(url, {}, REQUEST_TIMEOUT_MS);
+  if (!attempt.ok) {
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service is temporarily unavailable.",
       502,
     );
-  } finally {
-    clearTimeout(timeout);
   }
+  const response = attempt.response;
 
   if (!response.ok) {
     return lookupFailure(
@@ -341,12 +364,20 @@ async function fetchGoogleArabicTranslation(
 
   const json = await readBoundedJson(response);
   const responseData = json.ok ? json.data : null;
-  const firstTranslation = Array.isArray(responseData) ? responseData[0] : null;
-  const firstSegment = Array.isArray(firstTranslation)
-    ? firstTranslation[0]
-    : null;
-  const translated = Array.isArray(firstSegment)
-    ? boundedString(firstSegment[0], 512)
+  // A short word translates as a single segment, but Google's endpoint
+  // splits a full sentence definition into several — `responseData[0]` is an
+  // array of `[translatedChunk, originalChunk, ...]` tuples, one per clause.
+  // Reading only the first entry, as a single-word lookup safely could, would
+  // silently truncate any definition with more than one clause or sentence.
+  const segments = Array.isArray(responseData) ? responseData[0] : null;
+  const translated = Array.isArray(segments)
+    ? boundedString(
+        segments
+          .map((segment) => (Array.isArray(segment) ? segment[0] : null))
+          .filter((piece): piece is string => typeof piece === "string")
+          .join(""),
+        512,
+      )
     : null;
   if (!translated || !ARABIC_CHARACTER_PATTERN.test(translated)) {
     return lookupFailure(
@@ -359,38 +390,25 @@ async function fetchGoogleArabicTranslation(
 }
 
 async function fetchArabicTranslation(
-  word: string,
-  partOfSpeech: string,
+  text: string,
 ): Promise<LookupDecision<string>> {
   const url = new URL(MYMEMORY_API_URL);
-  // A bare English noun can be interpreted as an acronym or verb by generic
-  // translation memories (for example, "cat"). The article preserves the
-  // dictionary sense while still returning a concise Arabic headword.
-  const sourceText = partOfSpeech.toLocaleLowerCase("en").includes("noun")
-    ? `a ${word}`
-    : word;
-  url.searchParams.set("q", sourceText);
+  url.searchParams.set("q", text);
   url.searchParams.set("langpair", "en|ar");
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let response: Response;
-
-  try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-  } catch {
+  const attempt = await fetchWithRetry(
+    url,
+    { method: "GET", headers: { Accept: "application/json" } },
+    REQUEST_TIMEOUT_MS,
+  );
+  if (!attempt.ok) {
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service is temporarily unavailable.",
       502,
     );
-  } finally {
-    clearTimeout(timeout);
   }
+  const response = attempt.response;
 
   if (!response.ok) {
     return lookupFailure(
@@ -439,7 +457,7 @@ async function findCachedWord(
 
   url.searchParams.set(
     "select",
-    "word,meaning_ar,definition_en,pronunciation,ipa,part_of_speech,example_sentence",
+    "word,meaning_ar,definition_en,definition_ar,pronunciation,ipa,part_of_speech,example_sentence",
   );
   // The explicit owner filter complements RLS and keeps the query indexable.
   // Input validation excludes ILIKE wildcard characters, so this is an exact,
@@ -540,6 +558,11 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
   const word = normalizeDictionaryWord(value.word);
   const meaningAr = boundedString(value.meaning_ar, 512);
   const definition = boundedString(value.definition_en, 1_500);
+  // definition_ar is optional at the cache layer, not required: rows saved
+  // before this field existed have it as an empty string, and that must
+  // still load successfully rather than erroring on every previously-saved
+  // word until the user re-saves it.
+  const definitionAr = optionalBoundedString(value.definition_ar, 1_500) ?? "";
   const pronunciation = optionalBoundedString(value.pronunciation, 160);
   const ipa = optionalBoundedString(value.ipa, 180);
   const partOfSpeech = boundedString(value.part_of_speech, 80);
@@ -562,6 +585,7 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
     word,
     meaning_ar: meaningAr,
     definition_en: definition,
+    definition_ar: definitionAr,
     pronunciation,
     ipa,
     part_of_speech: partOfSpeech,
@@ -592,18 +616,14 @@ async function fetchEnglishDictionary(
   word: string,
 ): Promise<LookupDecision<EnglishDictionaryData>> {
   const url = `${FREE_DICTIONARY_BASE_URL}${encodeURIComponent(word)}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let response: Response;
+  const attempt = await fetchWithRetry(
+    url,
+    { method: "GET", headers: { Accept: "application/json" } },
+    REQUEST_TIMEOUT_MS,
+  );
 
-  try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-  } catch (error) {
-    return isAbortError(error)
+  if (!attempt.ok) {
+    return attempt.timedOut
       ? lookupFailure(
           "DICTIONARY_TIMEOUT",
           "The dictionary took too long to respond. Please try again.",
@@ -614,9 +634,8 @@ async function fetchEnglishDictionary(
           "The dictionary is temporarily unavailable.",
           502,
         );
-  } finally {
-    clearTimeout(timeout);
   }
+  const response = attempt.response;
 
   if (response.status === 404) {
     return lookupFailure(
@@ -699,7 +718,6 @@ function parseFreeDictionaryResponse(
         const definition = boundedString(definitionValue.definition, 1_500);
         if (!definition) continue;
 
-        const example = boundedString(definitionValue.example, 1_000) ?? "";
         const pronunciation = phonetic ? stripIpaDelimiters(phonetic) : "";
 
         return {
@@ -708,7 +726,9 @@ function parseFreeDictionaryResponse(
           pronunciation,
           ipa: pronunciation ? `/${pronunciation}/` : "",
           part_of_speech: partOfSpeech,
-          example_sentence: example,
+          // No suggested example: the saved meaning is a translation of the
+          // definition itself, not a usage sentence.
+          example_sentence: "",
         };
       }
     }
@@ -781,12 +801,9 @@ async function fetchWiktionaryWikitext(
   url.searchParams.set("formatversion", "2");
   url.searchParams.set("redirects", "1");
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let response: Response;
-
-  try {
-    response = await fetch(url, {
+  const attempt = await fetchWithRetry(
+    url,
+    {
       method: "GET",
       headers: {
         Accept: "application/json",
@@ -797,10 +814,12 @@ async function fetchWiktionaryWikitext(
         "User-Agent": WIKIMEDIA_USER_AGENT,
         "Api-User-Agent": WIKIMEDIA_USER_AGENT,
       },
-      signal: controller.signal,
-    });
-  } catch (error) {
-    return isAbortError(error)
+    },
+    REQUEST_TIMEOUT_MS,
+  );
+
+  if (!attempt.ok) {
+    return attempt.timedOut
       ? lookupFailure(
           "WIKTIONARY_TIMEOUT",
           "Wiktionary took too long to respond. Please try again.",
@@ -811,9 +830,8 @@ async function fetchWiktionaryWikitext(
           "Wiktionary is temporarily unavailable.",
           502,
         );
-  } finally {
-    clearTimeout(timeout);
   }
+  const response = attempt.response;
 
   if (response.status === 404) return { ok: true, data: null };
 
@@ -971,29 +989,14 @@ function parseWiktionaryDefinition(
         pronunciation: "",
         ipa: "",
         part_of_speech: partOfSpeech,
-        example_sentence: extractWiktionaryExample(lines, line),
+        // No suggested example: the saved meaning is a translation of the
+        // definition itself, not a usage sentence.
+        example_sentence: "",
       };
     }
   }
 
   return null;
-}
-
-/** Usage examples sit on the `#:` line directly beneath a sense. */
-function extractWiktionaryExample(lines: string[], senseLine: number): string {
-  for (let index = senseLine + 1; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    if (/^#[^#*:]/u.test(line)) break;
-    if (!/^#[:*]/u.test(line)) continue;
-
-    const templated = /\{\{(?:ux|usex|uxi|ux-lite)\|en\|([^}|]+)/u.exec(line);
-    const candidate = templated
-      ? cleanWikitextText(templated[1] ?? "", 1_000)
-      : cleanWikitextText(line.replace(/^#[:*]\s*/u, ""), 1_000);
-    if (candidate) return candidate;
-  }
-
-  return "";
 }
 
 function extractEnglishSection(wikitext: string): string | null {
@@ -1484,6 +1487,49 @@ function isAbortError(error: unknown): boolean {
     (error instanceof DOMException && error.name === "AbortError") ||
     (error instanceof Error && error.name === "AbortError")
   );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type FetchAttempt =
+  | { ok: true; response: Response }
+  | { ok: false; timedOut: boolean };
+
+/**
+ * Fetches with a per-attempt timeout, retrying on the failure modes that are
+ * usually transient: a network error, a timeout, or a 5xx from the upstream.
+ * A clean 4xx (404, 400, ...) is a real, stable answer and is returned
+ * immediately without burning retries on it.
+ */
+async function fetchWithRetry(
+  url: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  attempts: number = FETCH_ATTEMPTS,
+): Promise<FetchAttempt> {
+  let last: FetchAttempt = { ok: false, timedOut: false };
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      if (response.status >= 500 && attempt < attempts) {
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+      return { ok: true, response };
+    } catch (error) {
+      last = { ok: false, timedOut: isAbortError(error) };
+      if (attempt < attempts) await sleep(RETRY_DELAY_MS);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return last;
 }
 
 function safeRetryAfter(value: string | null): string | undefined {

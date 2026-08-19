@@ -19,6 +19,9 @@ const en = {
   "auth.badge": "Private by default",
   "auth.heroLine1": "Every word.",
   "auth.heroLine2": "Never lost.",
+
+  "demo.caption":
+    "A short preview: saved English words shown with their Arabic meanings, then a new word being looked up and added to the collection.",
   "auth.heroSubtitle":
     "A calm, personal vault for every English word you learn—and nothing you don’t need.",
   "auth.login.eyebrow": "Welcome back",
@@ -74,7 +77,6 @@ const en = {
   "stats.total": "Words saved",
   "stats.week": "Added this week",
   "stats.streak": "Day streak",
-  "stats.types": "Word types",
   "stats.streakHint": "Days in a row you saved a word",
 
   "search.placeholder": "Search words or Arabic meanings",
@@ -84,8 +86,6 @@ const en = {
   "search.match": "match",
   "search.matches": "matches",
 
-  "filter.label": "Filter by word type",
-  "filter.all": "All",
   "filter.sort": "Sort",
   "filter.newest": "Newest first",
   "filter.oldest": "Oldest first",
@@ -95,12 +95,15 @@ const en = {
   "word.ipa": "IPA",
   "word.arabic": "Arabic meaning",
   "word.definition": "Definition",
-  "word.example": "Example",
   "word.type": "Word type",
   "word.added": "Added",
   "word.pronounce": "Pronounce {word}",
   "word.delete": "Delete {word}",
   "word.closeDetails": "Close word details",
+  "word.notes": "Notes",
+  "word.notesPlaceholder": "Where did you hear it? Anything you want to remember…",
+  "word.saveNote": "Save note",
+  "word.notesSaveError": "Couldn't save your note. Please try again.",
 
   "pos.noun": "Noun",
   "pos.verb": "Verb",
@@ -151,9 +154,6 @@ const en = {
   "empty.addFirst": "Add your first word",
   "empty.noResultsTitle": "No words found",
   "empty.noResultsBody": "Nothing matches “{query}”. Try another word or Arabic meaning.",
-  "empty.noFilterTitle": "Nothing in this type yet",
-  "empty.noFilterBody": "You haven’t saved any words of this type. Try another filter.",
-  "empty.clearFilter": "Show all words",
 
   "delete.title": "Remove “{word}”?",
   "delete.body":
@@ -168,11 +168,7 @@ const en = {
   "toast.connectSupabase": "Connect Supabase to enable private accounts.",
 
   "settings.title": "Settings",
-  "settings.subtitle": "Choose how EBARA looks and reads.",
-  "settings.theme": "Theme",
-  "settings.themeLight": "Light",
-  "settings.themeDark": "Dark",
-  "settings.themeSystem": "System",
+  "settings.subtitle": "Choose how EBARA reads.",
   "settings.language": "Language",
   "settings.account": "Account",
   "settings.signedInAs": "Signed in as",
@@ -202,6 +198,9 @@ const ar: Dictionary = {
   "auth.badge": "خصوصيتك أولاً",
   "auth.heroLine1": "كل كلمة",
   "auth.heroLine2": "ما تضيع أبد.",
+
+  "demo.caption":
+    "عرض سريع: كلمات إنجليزية محفوظة مع معانيها بالعربي، وبعدين كلمة جديدة ندوّر عليها وتنحفظ بالمكتبة.",
   "auth.heroSubtitle":
     "مكتبة بسيطة وخاصة فيك، تجمع كل كلمة إنجليزية تتعلمها — بدون أي زيادة ما تحتاجها.",
   "auth.login.eyebrow": "حياك الله",
@@ -257,7 +256,6 @@ const ar: Dictionary = {
   "stats.total": "كلمة محفوظة",
   "stats.week": "أضفتها هالأسبوع",
   "stats.streak": "أيام متتالية",
-  "stats.types": "أنواع الكلمات",
   "stats.streakHint": "عدد الأيام اللي أضفت فيها كلمة ورا بعض",
 
   "search.placeholder": "دوّر على كلمة أو معناها بالعربي",
@@ -267,8 +265,6 @@ const ar: Dictionary = {
   "search.match": "نتيجة",
   "search.matches": "نتيجة",
 
-  "filter.label": "تصفية حسب نوع الكلمة",
-  "filter.all": "الكل",
   "filter.sort": "الترتيب",
   "filter.newest": "الأحدث أولاً",
   "filter.oldest": "الأقدم أولاً",
@@ -278,12 +274,15 @@ const ar: Dictionary = {
   "word.ipa": "الرموز الصوتية",
   "word.arabic": "المعنى بالعربي",
   "word.definition": "التعريف",
-  "word.example": "مثال",
   "word.type": "نوع الكلمة",
   "word.added": "أضفتها في",
   "word.pronounce": "استمع لنطق {word}",
   "word.delete": "احذف {word}",
   "word.closeDetails": "إغلاق",
+  "word.notes": "ملاحظات",
+  "word.notesPlaceholder": "وين سمعتها؟ أو أي شي تبي تتذكره…",
+  "word.saveNote": "احفظ الملاحظة",
+  "word.notesSaveError": "ما قدرنا نحفظ ملاحظتك. حاول مرة ثانية.",
 
   "pos.noun": "اسم",
   "pos.verb": "فعل",
@@ -332,9 +331,6 @@ const ar: Dictionary = {
   "empty.addFirst": "أضف أول كلمة",
   "empty.noResultsTitle": "ما لقينا شيء",
   "empty.noResultsBody": "ما لقينا كلمات تطابق «{query}». جرّب كلمة أو معنى ثاني.",
-  "empty.noFilterTitle": "ما عندك كلمات من هذا النوع",
-  "empty.noFilterBody": "ما حفظت أي كلمة من هذا النوع. جرّب تصفية ثانية.",
-  "empty.clearFilter": "عرض كل الكلمات",
 
   "delete.title": "متأكد إنك تبي تحذف «{word}»؟",
   "delete.body": "بتنحذف الكلمة وكل تفاصيلها من مكتبتك نهائياً.",
@@ -348,11 +344,7 @@ const ar: Dictionary = {
   "toast.connectSupabase": "اربط Supabase عشان تفعّل الحسابات الخاصة.",
 
   "settings.title": "الإعدادات",
-  "settings.subtitle": "خلّ EBARA على كيفك.",
-  "settings.theme": "المظهر",
-  "settings.themeLight": "فاتح",
-  "settings.themeDark": "داكن",
-  "settings.themeSystem": "حسب النظام",
+  "settings.subtitle": "خلّ EBARA يقرأ بلغتك.",
   "settings.language": "اللغة",
   "settings.account": "الحساب",
   "settings.signedInAs": "مسجّل دخولك بـ",
