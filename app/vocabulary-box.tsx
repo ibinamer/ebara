@@ -811,7 +811,13 @@ function AuthScreen({
         if (signInError) throw signInError;
       } else if (mode === "signup") {
         if (!acceptedTerms) throw new Error(t("auth.errAcceptTerms"));
-        const { error: signUpError } = await client.auth.signUp({ email, password });
+        const { error: signUpError } = await client.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+          },
+        });
         if (signUpError) throw signUpError;
         setMessage(t("auth.checkInbox"));
       } else if (mode === "forgot") {

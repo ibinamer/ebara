@@ -64,6 +64,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   ]);
 
   assert.match(app, /signInWithPassword/);
+  assert.match(app, /emailRedirectTo:\s*window\.location\.origin/);
   assert.match(app, /resetPasswordForEmail/);
   assert.match(app, /acceptedTerms/);
   assert.match(app, /functions\.invoke\(["']delete-account["']/);
