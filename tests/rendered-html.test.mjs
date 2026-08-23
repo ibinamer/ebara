@@ -283,7 +283,7 @@ test("saves a dictionary word when only the optional Arabic definition translati
             "{{trans-top|organized collection of information}}",
             "* Arabic: {{t|ar|قاعدة بيانات}}",
             "{{trans-bottom}}",
-          ].join("\\n"),
+          ].join("\n"),
         },
       });
     }
@@ -381,20 +381,21 @@ test("uses corpus popularity to select the common adjective sense of high", asyn
             "{{trans-top|a high point or position}}",
             "* Arabic: {{t|ar|قمة}}",
             "{{trans-bottom}}",
-            "{{trans-top|elevated; far above a base}}",
-            "* Arabic: {{t|ar|عالٍ}}",
+            "{{trans-top|elevated; tall}}{{multitrans|data=",
+            "* Arabic: {{qualifier|indefinite}} {{tt|ar|عَالٍ}}, {{tt+|ar|طَوِيل}}",
+            "*: Egyptian Arabic: {{tt|arz|عالي}}",
+            "*: Moroccan Arabic: {{t-needed|ary}}",
+            "}}",
             "{{trans-bottom}}",
-          ].join("\\n"),
+            "{{trans-top|slang: under the influence of drugs}}",
+            "* Arabic: {{tt|ar|مَسْطُول}}",
+            "{{trans-bottom}}",
+          ].join("\n"),
         },
       });
     }
 
     if (url.hostname === "api.mymemory.translated.net") {
-      if (url.searchParams.get("q") === "high") {
-        return Response.json({
-          responseData: { translatedText: "عالٍ" },
-        });
-      }
       return Response.json({ message: "unavailable" }, { status: 503 });
     }
 
@@ -408,7 +409,7 @@ test("uses corpus popularity to select the common adjective sense of high", asyn
     assert.equal(payload.ok, true);
     assert.equal(payload.data.word, "high");
     assert.equal(payload.data.part_of_speech, "adjective");
-    assert.equal(payload.data.meaning_ar, "عالٍ");
+    assert.equal(payload.data.meaning_ar, "عَالٍ");
     assert.match(payload.data.definition_en, /very elevated/i);
     assert.equal(payload.data.ipa, "/haɪ/");
   } finally {

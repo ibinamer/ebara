@@ -1130,14 +1130,22 @@ function findArabicMeaning(
   if (boxes.length === 0) return null;
 
   const definitionTokens = significantEnglishTokens(definition);
-  boxes.sort((left, right) => {
-    const scoreDifference =
-      translationGlossScore(right.gloss, definitionTokens) -
-      translationGlossScore(left.gloss, definitionTokens);
-    return scoreDifference || left.order - right.order;
-  });
+  const rankedBoxes = boxes
+    .map((box) => ({
+      ...box,
+      score: translationGlossScore(box.gloss, definitionTokens),
+    }))
+    .sort(
+      (left, right) => right.score - left.score || left.order - right.order,
+    );
 
-  return boxes[0]?.arabicTerms[0] ?? null;
+  const best = rankedBoxes[0];
+  if (!best) return null;
+  // When several senses exist, accepting a zero-overlap translation silently
+  // chooses whichever table happens to appear first. That is how the common
+  // adjective "high" became the unrelated slang Arabic meaning "مَسْطُول".
+  if (rankedBoxes.length > 1 && best.score === 0) return null;
+  return best.arabicTerms[0] ?? null;
 }
 
 const WIKTIONARY_PARTS_OF_SPEECH = new Map<string, string>([
@@ -1294,8 +1302,6 @@ function extractArabicTerms(translationBody: string): string[] {
 }
 
 function extractArabicTemplateTerms(value: string): string[] {
-  if (/please add|translation needed|t-needed/iu.test(value)) return [];
-
   const terms: string[] = [];
   const templatePattern =
     /\{\{(?:t\+?|t-check|t\+check|tt\+?|tt-check|tt\+check|l)\|ar\|([^|{}]+)(?:\|[^{}]*)?\}\}/giu;
