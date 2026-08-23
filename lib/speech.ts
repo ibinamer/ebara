@@ -1,5 +1,14 @@
-/** Speaks an English word using the browser's built-in speech synthesis. */
-export function speakWord(value: string): void {
+let activeAudio: HTMLAudioElement | null = null;
+
+function stopActiveAudio(): void {
+  if (!activeAudio) return;
+  activeAudio.pause();
+  activeAudio.removeAttribute("src");
+  activeAudio.load();
+  activeAudio = null;
+}
+
+function speakWithBrowser(value: string): void {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
 
   window.speechSynthesis.cancel();
@@ -7,6 +16,44 @@ export function speakWord(value: string): void {
   utterance.lang = "en-US";
   utterance.rate = 0.86;
   window.speechSynthesis.speak(utterance);
+}
+
+/**
+ * Plays the shared Chirp 3 HD pronunciation. If the hosted voice is not yet
+ * configured or is temporarily unavailable, the device voice remains a
+ * seamless fallback instead of making pronunciation fail.
+ */
+export function speakWord(value: string): void {
+  if (typeof window === "undefined") return;
+
+  stopActiveAudio();
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+
+  const audio = new Audio(`/api/pronunciation?word=${encodeURIComponent(value)}`);
+  activeAudio = audio;
+  audio.preload = "auto";
+  let finished = false;
+
+  const cleanup = () => {
+    if (activeAudio === audio) activeAudio = null;
+  };
+  const fallback = () => {
+    if (finished) return;
+    finished = true;
+    cleanup();
+    speakWithBrowser(value);
+  };
+
+  audio.addEventListener(
+    "ended",
+    () => {
+      finished = true;
+      cleanup();
+    },
+    { once: true },
+  );
+  audio.addEventListener("error", fallback, { once: true });
+  void audio.play().catch(fallback);
 }
 
 export function normalizeCandidate(value: string): string {

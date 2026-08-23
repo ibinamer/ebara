@@ -15,6 +15,9 @@ games, streaks, chat, or other learning-platform features.
 - Typed input or short browser voice input
 - English definitions, pronunciation, IPA, part of speech, and an available
   example from the Free Dictionary API
+- Google Cloud Chirp 3 HD playback when configured. Each English term is
+  generated once and reused from shared audio storage; the device voice remains
+  the automatic fallback.
 - Arabic dictionary meanings from Wiktionary through the MediaWiki Action API
 - Permanent Supabase storage for every completed word record
 - Full English and Arabic interface with automatic LTR/RTL switching
