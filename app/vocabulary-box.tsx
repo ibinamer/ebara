@@ -1159,7 +1159,10 @@ function AddWordDialog({
         };
         if (!response.ok) {
           const apiCode = typeof payload.error === "object" ? payload.error?.code : null;
-          if (apiCode === "RATE_LIMITED") throw new Error(t("add.errRateLimited"));
+          if (apiCode === "DICTIONARY_NOT_FOUND") throw new Error(t("add.errNotFound"));
+          if (apiCode === "RATE_LIMITED" || apiCode?.endsWith("_RATE_LIMITED")) {
+            throw new Error(t("add.errRateLimited"));
+          }
           if (apiCode?.startsWith("DICTIONARY_") || apiCode?.startsWith("WIKTIONARY_")) {
             throw new Error(t("add.errDictionaryUnavailable"));
           }

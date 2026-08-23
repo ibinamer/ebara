@@ -132,6 +132,8 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   );
   assert.match(route, /manual-meaning-required/);
   assert.match(app, /add\.manualMeaningPlaceholder/);
+  assert.match(app, /apiCode === "DICTIONARY_NOT_FOUND"/);
+  assert.match(route, /action", "expandtemplates"/);
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
   assert.match(route, /normalizeDictionaryAudioUrl/);
   assert.match(route, /audio_url/);
@@ -602,6 +604,191 @@ test("returns English dictionary facts for manual Arabic entry when translators 
     assert.equal(payload.data.word, "fallback");
     assert.equal(payload.data.meaning_ar, "");
     assert.match(payload.data.definition_en, /alternative/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
+});
+
+test("expands template-only Wiktionary definitions for ordinary phrases", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const expandedPages = [];
+
+  const phraseDefinitions = new Map([
+    [
+      "big guy",
+      {
+        raw: "{{non-gloss|A term of [[endearment]], usually addressed toward an all-around good male person.}}",
+        expanded:
+          '<span class="use-with-mention">A term of [[:endearment#English|endearment]], usually addressed toward an all-around good male person.</span>',
+        expected: /term of endearment/i,
+      },
+    ],
+    [
+      "by the book",
+      {
+        raw: "{{&lit|en|by|the|book}}",
+        expanded:
+          "Used other than figuratively or idiomatically: see [[by]], [[the]], [[book]].",
+        expected: /used other than figuratively/i,
+      },
+    ],
+  ]);
+
+  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json({ title: "No Definitions Found" }, { status: 404 });
+    }
+
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ tags: ["n"] }]);
+    }
+
+    if (url.hostname === "en.wiktionary.org") {
+      const action = url.searchParams.get("action");
+      const page = url.searchParams.get("page") ?? url.searchParams.get("title") ?? "";
+      if (action === "expandtemplates") {
+        const phrase = phraseDefinitions.get(page);
+        assert.ok(phrase, `Unexpected phrase expansion: ${page}`);
+        expandedPages.push(page);
+        return Response.json({ expandtemplates: { wikitext: phrase.expanded } });
+      }
+
+      if (page.endsWith("/translations")) {
+        return Response.json({ error: { code: "missingtitle" } });
+      }
+
+      const phrase = phraseDefinitions.get(page);
+      assert.ok(phrase, `Unexpected Wiktionary page: ${page}`);
+      return Response.json({
+        parse: {
+          wikitext: [
+            "==English==",
+            "===Noun===",
+            `# ${phrase.raw}`,
+          ].join("\n"),
+        },
+      });
+    }
+
+    if (url.hostname === "api.mymemory.translated.net") {
+      return Response.json({ message: "rate limited" }, { status: 429 });
+    }
+
+    throw new Error(`Unexpected external request in phrase test: ${url}`);
+  };
+
+  try {
+    for (const [phrase, expectation] of phraseDefinitions) {
+      const response = await callDictionary(phrase);
+      const payload = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(payload));
+      assert.equal(payload.ok, true);
+      assert.equal(payload.needs_arabic_meaning, true);
+      assert.equal(payload.data.word, phrase);
+      assert.equal(payload.data.part_of_speech, "phrase");
+      assert.match(payload.data.definition_en, expectation.expected);
+    }
+    assert.deepEqual(expandedPages.sort(), [...phraseDefinitions.keys()].sort());
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
+});
+
+test("uses translation coverage to prefer the broadly documented phrase sense", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+
+  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json([
+        {
+          word: "catch up",
+          meanings: [
+            {
+              partOfSpeech: "verb",
+              definitions: [
+                { definition: "To pick up suddenly." },
+                { definition: "To reach something that had been ahead." },
+              ],
+            },
+          ],
+        },
+      ]);
+    }
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ word: "catch up", tags: ["v"] }]);
+    }
+    if (url.hostname === "en.wiktionary.org") {
+      const page = url.searchParams.get("page") ?? "";
+      if (page.endsWith("/translations")) {
+        return Response.json({ error: { code: "missingtitle" } });
+      }
+      return Response.json({
+        parse: {
+          wikitext: [
+            "==English==",
+            "===Verb===",
+            "# {{lb|en|transitive}} To [[pick up]] [[suddenly]].",
+            "# {{lb|en|ambitransitive}} To [[reach]] something that had been [[ahead]].",
+            "====Translations====",
+            "{{trans-top|to pick up suddenly}}",
+            "* Bulgarian: {{t|bg|грабвам}}",
+            "* Turkish: {{t|tr|yakalamak}}",
+            "{{trans-bottom}}",
+            "{{trans-top|to reach something that had been ahead}}",
+            "* Arabic: {{t|ar|لَحِقَ}}",
+            "* French: {{t|fr|rattraper}}",
+            "* German: {{t|de|einholen}}",
+            "* Italian: {{t|it|raggiungere}}",
+            "* Japanese: {{t|ja|追い付く}}",
+            "* Spanish: {{t|es|alcanzar}}",
+            "{{trans-bottom}}",
+          ].join("\n"),
+        },
+      });
+    }
+    if (url.hostname === "api.mymemory.translated.net") {
+      return Response.json({ message: "rate limited" }, { status: 429 });
+    }
+    throw new Error(`Unexpected external request in phrase-sense test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("catch up");
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.ok, true);
+    assert.match(payload.data.definition_en, /reach something that had been ahead/i);
+    assert.equal(payload.data.meaning_ar, "لَحِقَ");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalGoogleKey === undefined) {

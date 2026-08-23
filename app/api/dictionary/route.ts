@@ -145,6 +145,7 @@ type RankedEnglishDictionaryData = {
 type TranslationBox = {
   gloss: string;
   arabicTerms: string[];
+  languageCount: number;
   order: number;
 };
 
@@ -273,21 +274,39 @@ export async function POST(request: Request): Promise<Response> {
     partOfSpeechRankingPromise,
   ]);
 
+  // Wiktionary is the phrase authority even when Free Dictionary happens to
+  // return the phrase. Free Dictionary mirrors source order, which can put a
+  // rare literal sense before the everyday idiom (for example "catch up" as
+  // "pick up suddenly"). Translation-table coverage lets the parser choose
+  // the broadly documented sense instead.
+  const fromWiktionary =
+    mainWikitext.ok && mainWikitext.data &&
+    (!english.ok || isMultiWordTerm(word))
+      ? await parseWiktionaryDefinition(
+          mainWikitext.data,
+          word,
+          partOfSpeechRanking,
+        )
+      : null;
+
   let englishData: EnglishDictionaryData;
   if (english.ok) {
-    englishData = english.data;
+    englishData =
+      isMultiWordTerm(word) && fromWiktionary
+        ? {
+            ...fromWiktionary,
+            pronunciation:
+              english.data.pronunciation || fromWiktionary.pronunciation,
+            audio_url: english.data.audio_url || fromWiktionary.audio_url,
+            ipa: english.data.ipa || fromWiktionary.ipa,
+            example_sentence:
+              fromWiktionary.example_sentence || english.data.example_sentence,
+          }
+        : english.data;
   } else {
     // Wiktionary was already fetched in parallel and is a fully independent
     // source, so its wikitext can rescue this lookup no matter *why* Free
-    // Dictionary failed — a clean 404 (it has no entry for some ordinary set
-    // phrases), or a transient timeout/5xx that had nothing to do with the
-    // word itself. Gating this to 404 only used to mean a Free Dictionary
-    // blip failed the whole lookup even when Wiktionary had the word right
-    // there.
-    const fromWiktionary =
-      mainWikitext.ok && mainWikitext.data
-        ? parseWiktionaryDefinition(mainWikitext.data, word, partOfSpeechRanking)
-        : null;
+    // Dictionary failed — a clean 404 or a transient timeout/5xx.
     if (!fromWiktionary) return lookupErrorResponse(english, rate);
     englishData = fromWiktionary;
   }
@@ -316,10 +335,15 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  const meaningLookupText = translationHeadwordContext(
-    englishData.word,
-    englishData.part_of_speech,
-  );
+  // A bare phrase is often ambiguous to machine translation. Translating the
+  // selected dictionary definition preserves the intended idiomatic sense;
+  // single words still use the shorter headword context.
+  const meaningLookupText = isMultiWordTerm(englishData.word)
+    ? englishData.definition_en
+    : translationHeadwordContext(
+        englishData.word,
+        englishData.part_of_speech,
+      );
   const shortMeaningPromise = translateMeaningToArabic(
     meaningLookupText,
     meaningAr,
@@ -1180,6 +1204,96 @@ function parseWiktionaryResponse(value: unknown): string | null | undefined {
   return typeof wikitext === "string" ? wikitext : undefined;
 }
 
+/**
+ * Lets Wikimedia expand a template-only definition line using the same Lua
+ * modules that render Wiktionary itself. This is deliberately a fallback: most
+ * ordinary definitions clean up locally, while phrases such as "big guy" put
+ * their entire first sense inside templates like `non-gloss` or `&lit`.
+ */
+async function expandWiktionaryDefinition(
+  page: string,
+  definitionWikitext: string,
+): Promise<LookupDecision<string>> {
+  const url = new URL(WIKTIONARY_API_URL);
+  url.searchParams.set("action", "expandtemplates");
+  url.searchParams.set("title", page);
+  url.searchParams.set("text", definitionWikitext);
+  url.searchParams.set("prop", "wikitext");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("formatversion", "2");
+
+  const attempt = await fetchWithRetry(
+    url,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": WIKIMEDIA_USER_AGENT,
+        "Api-User-Agent": WIKIMEDIA_USER_AGENT,
+      },
+    },
+    REQUEST_TIMEOUT_MS,
+  );
+
+  if (!attempt.ok) {
+    return attempt.timedOut
+      ? lookupFailure(
+          "WIKTIONARY_TIMEOUT",
+          "Wiktionary took too long to expand this definition.",
+          504,
+        )
+      : lookupFailure(
+          "WIKTIONARY_UNAVAILABLE",
+          "Wiktionary could not expand this definition.",
+          502,
+        );
+  }
+
+  const response = attempt.response;
+  if (response.status === 429) {
+    return lookupFailure(
+      "WIKTIONARY_RATE_LIMITED",
+      "Wiktionary is busy. Please try again shortly.",
+      429,
+      safeRetryAfter(response.headers.get("retry-after")),
+    );
+  }
+  if (!response.ok) {
+    return lookupFailure(
+      response.status >= 500
+        ? "WIKTIONARY_UNAVAILABLE"
+        : "WIKTIONARY_UPSTREAM_ERROR",
+      "Wiktionary could not expand this definition.",
+      502,
+    );
+  }
+
+  const json = await readBoundedJson(response);
+  if (!json.ok) {
+    return lookupFailure(
+      "WIKTIONARY_INVALID_RESPONSE",
+      "Wiktionary returned an unreadable expanded definition.",
+      502,
+    );
+  }
+
+  const expanded = parseWiktionaryExpansionResponse(json.data);
+  if (!expanded) {
+    return lookupFailure(
+      "WIKTIONARY_INVALID_RESPONSE",
+      "Wiktionary returned an invalid expanded definition.",
+      502,
+    );
+  }
+
+  return { ok: true, data: expanded };
+}
+
+function parseWiktionaryExpansionResponse(value: unknown): string | null {
+  if (!isRecord(value) || !isRecord(value.expandtemplates)) return null;
+  return boundedString(value.expandtemplates.wikitext, 10_000);
+}
+
 function findArabicMeaning(
   wikitext: string | null,
   definition: string,
@@ -1241,13 +1355,15 @@ const WIKTIONARY_PARTS_OF_SPEECH = new Map<string, string>([
  * the Arabic translation, so this reuses it rather than failing the lookup.
  * It is still a published dictionary entry, not generated text.
  */
-function parseWiktionaryDefinition(
+async function parseWiktionaryDefinition(
   wikitext: string,
   term: string,
   partOfSpeechRanking: string[],
-): EnglishDictionaryData | null {
+): Promise<EnglishDictionaryData | null> {
   const section = extractEnglishSection(wikitext);
   if (!section) return null;
+
+  const translationBoxes = extractTranslationBoxes(section);
 
   const headings = [...section.matchAll(/^={3,}\s*([A-Za-z ]+?)\s*={3,}\s*$/gmu)];
 
@@ -1279,34 +1395,84 @@ function parseWiktionaryDefinition(
         left.order - right.order,
     );
 
-  for (const rankedSection of rankedSections) {
+  const candidates: Array<{
+    definition: string;
+    languageCount: number;
+    matchScore: number;
+    order: number;
+    partOfSpeech: string;
+    sectionOrder: number;
+  }> = [];
+
+  for (const [sectionOrder, rankedSection] of rankedSections.entries()) {
     const lines = rankedSection.body.split(/\r?\n/u);
 
     for (let line = 0; line < lines.length; line += 1) {
       // Senses are `# ...`; `#*`, `#:` and `##` are citations and sub-senses.
       if (!/^#[^#*:]/u.test(lines[line] ?? "")) continue;
 
-      const definition = cleanWikitextText(
-        (lines[line] ?? "").replace(/^#\s*/u, ""),
-        1_500,
-      );
-      if (!definition) continue;
+      const rawDefinition = (lines[line] ?? "").replace(/^#\s*/u, "");
+      let definition = cleanWikitextText(rawDefinition, 1_500);
 
-      return {
-        word: term,
-        definition_en: definition,
-        pronunciation: "",
-        audio_url: "",
-        ipa: "",
-        part_of_speech: rankedSection.partOfSpeech,
-        // No suggested example: the saved meaning is a translation of the
-        // definition itself, not a usage sentence.
-        example_sentence: "",
-      };
+      // Template-only senses are valid definitions, not empty lines. Ask the
+      // official MediaWiki expander to render them instead of maintaining an
+      // incomplete, ever-growing list of Wiktionary templates in EBARA.
+      if (!isMeaningfulDefinition(definition) && rawDefinition.includes("{{")) {
+        const expanded = await expandWiktionaryDefinition(term, rawDefinition);
+        if (expanded.ok) {
+          definition = cleanWikitextText(expanded.data, 1_500);
+        }
+      }
+
+      if (!isMeaningfulDefinition(definition)) continue;
+
+      const definitionTokens = significantEnglishTokens(definition);
+      const matchingTranslation = translationBoxes
+        .map((box) => ({
+          languageCount: box.languageCount,
+          score: translationGlossScore(box.gloss, definitionTokens),
+        }))
+        .filter((box) => box.score > 0)
+        .sort(
+          (left, right) =>
+            right.languageCount - left.languageCount || right.score - left.score,
+        )[0];
+
+      candidates.push({
+        definition,
+        languageCount: matchingTranslation?.languageCount ?? 0,
+        matchScore: matchingTranslation?.score ?? 0,
+        order: line,
+        partOfSpeech: rankedSection.partOfSpeech,
+        sectionOrder,
+      });
     }
   }
 
-  return null;
+  const best = candidates.sort(
+    (left, right) =>
+      left.sectionOrder - right.sectionOrder ||
+      right.languageCount - left.languageCount ||
+      right.matchScore - left.matchScore ||
+      left.order - right.order,
+  )[0];
+  if (!best) return null;
+
+  return {
+    word: term,
+    definition_en: best.definition,
+    pronunciation: "",
+    audio_url: "",
+    ipa: "",
+    part_of_speech: best.partOfSpeech,
+    // No suggested example: the saved meaning is a translation of the
+    // definition itself, not a usage sentence.
+    example_sentence: "",
+  };
+}
+
+function isMeaningfulDefinition(value: string | null): value is string {
+  return Boolean(value && /[\p{L}\p{N}]/u.test(value));
 }
 
 function extractEnglishSection(wikitext: string): string | null {
@@ -1329,10 +1495,19 @@ function extractTranslationBoxes(section: string): TranslationBox[] {
     const gloss = firstTemplateParameter(match[1] ?? "");
     const body = match[2] ?? "";
     const arabicTerms = extractArabicTerms(body);
-    boxes.push({ gloss, arabicTerms, order: boxes.length });
+    const languageCount = countTranslationLanguages(body);
+    boxes.push({ gloss, arabicTerms, languageCount, order: boxes.length });
   }
 
   return boxes;
+}
+
+function countTranslationLanguages(translationBody: string): number {
+  let count = 0;
+  for (const line of translationBody.split(/\r?\n/u)) {
+    if (/^[:#]*\*\s*\p{L}[^:\n]{0,80}:/u.test(line)) count += 1;
+  }
+  return count;
 }
 
 function firstTemplateParameter(value: string): string {
