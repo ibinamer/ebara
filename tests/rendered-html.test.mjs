@@ -126,7 +126,12 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(route, /https:\/\/en\.wiktionary\.org\/w\/api\.php/);
   assert.match(route, /https:\/\/translation\.googleapis\.com\/language\/translate\/v2/);
   assert.match(route, /GOOGLE_CLOUD_TRANSLATE_API_KEY/);
-  assert.match(route, /definition_ar: definitionDecision\.ok \? definitionDecision\.data : ""/);
+  assert.match(
+    route,
+    /definition_ar: definitionDecision\?\.ok \? definitionDecision\.data : ""/,
+  );
+  assert.match(route, /manual-meaning-required/);
+  assert.match(app, /add\.manualMeaningPlaceholder/);
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
   assert.match(route, /normalizeDictionaryAudioUrl/);
   assert.match(route, /audio_url/);
@@ -452,6 +457,151 @@ test("uses corpus popularity to select the common adjective sense of high", asyn
     assert.equal(payload.data.meaning_ar, "عَالٍ");
     assert.match(payload.data.definition_en, /very elevated/i);
     assert.equal(payload.data.ipa, "/haɪ/");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
+});
+
+test("reads trans-top-see Arabic meanings without falling through to translation", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  let myMemoryCalls = 0;
+
+  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json([
+        {
+          word: "package",
+          phonetic: "/ˈpækɪdʒ/",
+          meanings: [
+            {
+              partOfSpeech: "noun",
+              definitions: [
+                {
+                  definition: "Something which is packed, a parcel, a box, an envelope.",
+                },
+              ],
+            },
+          ],
+        },
+      ]);
+    }
+
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ word: "package", tags: ["n", "v"] }]);
+    }
+
+    if (url.hostname === "en.wiktionary.org") {
+      return Response.json({
+        parse: {
+          wikitext: [
+            "==English==",
+            "===Noun===",
+            "# Something which is packed, a parcel, a box, an envelope.",
+            "====Translations====",
+            "{{trans-top-see|something which is packed|pack}}",
+            "* Arabic: {{t|ar|صُرَّة|f}}, {{t+|ar|طَرْد|m}}, {{t|ar|حُزْمَة|f}}",
+            "{{trans-bottom}}",
+          ].join("\n"),
+        },
+      });
+    }
+
+    if (url.hostname === "api.mymemory.translated.net") {
+      myMemoryCalls += 1;
+      return Response.json({ message: "rate limited" }, { status: 429 });
+    }
+
+    throw new Error(`Unexpected external request in package test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("package");
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.needs_arabic_meaning, false);
+    assert.equal(payload.data.meaning_ar, "صُرَّة");
+    // One optional definition translation may still be attempted; the required
+    // short meaning must already have come from Wiktionary.
+    assert.equal(myMemoryCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
+});
+
+test("returns English dictionary facts for manual Arabic entry when translators fail", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+
+  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json([
+        {
+          word: "fallback",
+          phonetic: "/ˈfɔːlbæk/",
+          meanings: [
+            {
+              partOfSpeech: "noun",
+              definitions: [{ definition: "An alternative used when another option fails." }],
+            },
+          ],
+        },
+      ]);
+    }
+
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ word: "fallback", tags: ["n"] }]);
+    }
+
+    if (url.hostname === "en.wiktionary.org") {
+      return Response.json({ parse: { wikitext: "==English==\n===Noun===\n# An alternative." } });
+    }
+
+    if (url.hostname === "api.mymemory.translated.net") {
+      return Response.json({ message: "rate limited" }, { status: 429 });
+    }
+
+    throw new Error(`Unexpected external request in fallback test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("fallback");
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.needs_arabic_meaning, true);
+    assert.equal(payload.data.word, "fallback");
+    assert.equal(payload.data.meaning_ar, "");
+    assert.match(payload.data.definition_en, /alternative/i);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalGoogleKey === undefined) {

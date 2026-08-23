@@ -152,6 +152,14 @@ const en = {
     "Microphone access was blocked. Allow it in your browser, then try again.",
   "add.errVoiceUnclear": "I couldn’t hear that clearly. Try once more or type the word.",
   "add.errSaveFailed": "We couldn’t save this word.",
+  "add.errRateLimited": "Too many lookups at once. Wait a moment and try again.",
+  "add.errDictionaryUnavailable":
+    "The dictionary is temporarily unavailable. Try again in a moment.",
+  "add.errArabicMeaning": "Enter a short Arabic meaning before saving.",
+  "add.manualMeaningLabel": "Arabic meaning",
+  "add.manualMeaningPlaceholder": "اكتب المعنى بالعربي",
+  "add.manualMeaningHint":
+    "We found the dictionary details, but automatic Arabic translation is unavailable. Add the Arabic meaning to save the word.",
 
   "empty.readyTitle": "Your box is ready",
   "empty.readyBody": "Save the first word you want to remember. It only takes a moment.",
@@ -349,6 +357,13 @@ const ar: Dictionary = {
   "add.errMicBlocked": "المايك محظور. اسمح له من إعدادات المتصفح وجرّب مرة ثانية.",
   "add.errVoiceUnclear": "ما سمعناها زين. جرّب مرة ثانية أو اكتبها.",
   "add.errSaveFailed": "ما قدرنا نحفظ الكلمة.",
+  "add.errRateLimited": "صار فيه طلبات كثيرة بنفس الوقت. انتظر شوي وجرّب مرة ثانية.",
+  "add.errDictionaryUnavailable": "المعجم متوقف مؤقتًا. جرّب مرة ثانية بعد لحظات.",
+  "add.errArabicMeaning": "اكتب معنى عربي مختصر قبل الحفظ.",
+  "add.manualMeaningLabel": "المعنى بالعربي",
+  "add.manualMeaningPlaceholder": "اكتب المعنى بالعربي",
+  "add.manualMeaningHint":
+    "لقينا معلومات الكلمة، لكن الترجمة التلقائية ما اشتغلت. اكتب معناها بالعربي ونحفظ لك الباقي.",
 
   "empty.readyTitle": "مكتبتك جاهزة",
   "empty.readyBody": "يلا أضف أول كلمة تبي تحفظها، ما تاخذ منك دقيقة.",

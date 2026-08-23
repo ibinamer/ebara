@@ -61,6 +61,7 @@ const ProductDemo = lazy(() =>
 
 type AuthMode = "login" | "signup" | "forgot" | "update";
 type AddStep = "capture" | "review";
+const ARABIC_CHARACTER_PATTERN = /\p{Script=Arabic}/u;
 
 type SpeechAlternative = { transcript: string; confidence: number };
 type SpeechResultEventLike = {
@@ -1151,16 +1152,18 @@ function AddWordDialog({
           body: JSON.stringify({ word: normalized }),
         });
         const payload = (await response.json()) as DictionaryEntry & {
-          error?: string | { message?: string };
+          error?: string | { code?: string; message?: string };
           message?: string;
           data?: DictionaryEntry;
+          needs_arabic_meaning?: boolean;
         };
         if (!response.ok) {
-          const apiMessage =
-            typeof payload.error === "string"
-              ? payload.error
-              : payload.error?.message ?? payload.message;
-          throw new Error(apiMessage || t("add.errNotFound"));
+          const apiCode = typeof payload.error === "object" ? payload.error?.code : null;
+          if (apiCode === "RATE_LIMITED") throw new Error(t("add.errRateLimited"));
+          if (apiCode?.startsWith("DICTIONARY_") || apiCode?.startsWith("WIKTIONARY_")) {
+            throw new Error(t("add.errDictionaryUnavailable"));
+          }
+          throw new Error(t("add.errNotFound"));
         }
         result = payload.data ?? payload;
       }
@@ -1230,10 +1233,15 @@ function AddWordDialog({
 
   async function saveWord() {
     if (!dictionaryEntry) return;
+    const meaning = dictionaryEntry.meaning_ar.trim();
+    if (!meaning || !ARABIC_CHARACTER_PATTERN.test(meaning)) {
+      setError(t("add.errArabicMeaning"));
+      return;
+    }
     setIsSaving(true);
     setError(null);
     try {
-      await onSave(dictionaryEntry);
+      await onSave({ ...dictionaryEntry, meaning_ar: meaning });
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("add.errSaveFailed"));
@@ -1375,7 +1383,34 @@ function AddWordDialog({
         </div>
       ) : dictionaryEntry ? (
         <div className="mt-7">
-          <WordFacts entry={dictionaryEntry} />
+          <WordFacts
+            entry={dictionaryEntry}
+            meaningEditor={
+              <div className="max-w-xl">
+                <input
+                  type="text"
+                  lang="ar"
+                  dir="rtl"
+                  value={dictionaryEntry.meaning_ar}
+                  onChange={(event) => {
+                    setDictionaryEntry((current) =>
+                      current
+                        ? { ...current, meaning_ar: event.target.value.slice(0, 512) }
+                        : current,
+                    );
+                    setError(null);
+                  }}
+                  className="manual-meaning-input"
+                  placeholder={t("add.manualMeaningPlaceholder")}
+                  aria-label={t("add.manualMeaningLabel")}
+                  autoComplete="off"
+                />
+                <p className="type-caption mt-2.5" style={{ color: "var(--text-muted)" }}>
+                  {t("add.manualMeaningHint")}
+                </p>
+              </div>
+            }
+          />
 
           {error && <DialogError message={error} />}
 

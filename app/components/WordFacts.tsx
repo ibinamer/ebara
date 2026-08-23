@@ -1,11 +1,12 @@
 "use client";
 
 import { Volume2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { translatePartOfSpeech, useI18n } from "@/lib/i18n";
 import { speakWord } from "@/lib/speech";
 import type { DictionaryEntry } from "@/lib/words";
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="border-t pt-5" style={{ borderColor: "var(--border)" }}>
       <p className="detail-label">{label}</p>
@@ -21,7 +22,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
  * translation directly beneath it. Used by both the detail dialog and the
  * add-word review step so a word always looks the same wherever it appears.
  */
-export function WordFacts({ entry }: { entry: DictionaryEntry }) {
+export function WordFacts({
+  entry,
+  meaningEditor,
+}: {
+  entry: DictionaryEntry;
+  meaningEditor?: ReactNode;
+}) {
   const { t } = useI18n();
 
   return (
@@ -61,14 +68,18 @@ export function WordFacts({ entry }: { entry: DictionaryEntry }) {
       )}
 
       <Row label={t("word.arabic")}>
-        <p
-          lang="ar"
-          dir="rtl"
-          className="bidi-isolate text-ui-start type-meaning"
-          style={{ color: "var(--text)" }}
-        >
-          {entry.meaning_ar}
-        </p>
+        {entry.meaning_ar ? (
+          <p
+            lang="ar"
+            dir="rtl"
+            className="bidi-isolate text-ui-start type-meaning"
+            style={{ color: "var(--text)" }}
+          >
+            {entry.meaning_ar}
+          </p>
+        ) : (
+          meaningEditor
+        )}
       </Row>
 
       <Row label={t("word.definition")}>

@@ -326,29 +326,42 @@ export async function POST(request: Request): Promise<Response> {
   );
 
   const meaningDecision = await shortMeaningPromise;
+  const needsArabicMeaning = !meaningDecision.ok;
 
-  if (!meaningDecision.ok) return lookupErrorResponse(meaningDecision, rate);
+  // Do not discard valid English dictionary data just because every automatic
+  // Arabic source is temporarily unavailable. The client can ask the learner
+  // for a short Arabic gloss and still save the completed dictionary record.
+  if (needsArabicMeaning) {
+    reportTranslationFailure("all", "manual-meaning-required");
+  }
 
   // The English definition and short Arabic meaning are the core record. A
   // full Arabic rendering of the definition is useful, but an outage at a
   // translation provider must not make the whole word impossible to save.
-  const definitionDecision = await translateToArabic(englishData.definition_en);
+  const definitionDecision = needsArabicMeaning
+    ? null
+    : await translateToArabic(englishData.definition_en);
   const data: DictionaryResult = {
     ...englishData,
-    meaning_ar: meaningDecision.data,
-    definition_ar: definitionDecision.ok ? definitionDecision.data : "",
+    meaning_ar: meaningDecision.ok ? meaningDecision.data : "",
+    definition_ar: definitionDecision?.ok ? definitionDecision.data : "",
   };
 
-  if (!definitionDecision.ok) {
+  if (definitionDecision && !definitionDecision.ok) {
     reportTranslationFailure("all", "optional-definition-translation-failed");
   }
 
-  await storeSharedDictionaryEntry(request, word, data);
+  // Only complete automatic records are shared. Any manual gloss belongs to
+  // the learner who entered it and is saved in that learner's own collection.
+  if (!needsArabicMeaning) {
+    await storeSharedDictionaryEntry(request, word, data);
+  }
 
   return Response.json(
     {
       ok: true as const,
       cached: false,
+      needs_arabic_meaning: needsArabicMeaning,
       data,
     },
     { status: 200, headers: responseHeaders(rate) },
@@ -1310,7 +1323,7 @@ function extractEnglishSection(wikitext: string): string | null {
 function extractTranslationBoxes(section: string): TranslationBox[] {
   const boxes: TranslationBox[] = [];
   const boxPattern =
-    /\{\{(?:trans-top|trans-top-also|checktrans-top)\b([^}]*)\}\}([\s\S]*?)\{\{trans-bottom\}\}/giu;
+    /\{\{(?:trans-top-see|trans-top-also|checktrans-top|trans-top)(?=\||\}\})([^}]*)\}\}([\s\S]*?)\{\{trans-bottom\}\}/giu;
 
   for (const match of section.matchAll(boxPattern)) {
     const gloss = firstTemplateParameter(match[1] ?? "");

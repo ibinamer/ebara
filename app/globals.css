@@ -714,6 +714,28 @@ body {
   letter-spacing: 0;
 }
 
+.manual-meaning-input {
+  width: 100%;
+  min-height: 3.5rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-control);
+  outline: 0;
+  background: var(--surface);
+  padding: 0.85rem 1rem;
+  color: var(--text);
+  font-size: 1.125rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.manual-meaning-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--ring);
+}
+
+.manual-meaning-input::placeholder {
+  color: var(--text-faint);
+}
+
 .voice-button {
   display: grid;
   width: 2.5rem;
