@@ -34,7 +34,7 @@ games, streaks, chat, or other learning-platform features.
 | Styling | Tailwind CSS v4 plus a token layer in `app/globals.css` |
 | Auth & data | Supabase Auth and PostgreSQL with row-level security |
 | Build tooling | Vite 8, Wrangler |
-| Dictionary sources | Free Dictionary API, Wiktionary via the MediaWiki Action API |
+| Dictionary sources | Free Dictionary API, Wiktionary via the MediaWiki Action API, Datamuse part-of-speech popularity metadata |
 | Arabic definition translation | Google Cloud Translation (official, optional) with a best-effort MyMemory fallback |
 | Fonts | Playfair Display, IBM Plex Sans Arabic, IBM Plex Mono — self-hosted |
 
@@ -249,22 +249,26 @@ generated text.
 2. The authenticated server route repeats an owner-scoped Supabase lookup. If
    the word is already saved, it returns that stored record and makes no
    external dictionary request. This also covers stale tabs and other devices.
-3. For a genuinely new word, the server retrieves the primary English entry
-   from `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`. The first
-   primary meaning and definition are treated as the most common result.
+3. For a genuinely new word, the server retrieves the English entries from
+   `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`. Datamuse ranks
+   parts of speech by popularity in Google Books Ngrams, and the server selects
+   the first dictionary definition inside the most popular category. This keeps
+   an everyday adjective such as `high` from opening on its rare noun sense.
 4. The server retrieves a matching Arabic dictionary meaning from English
    Wiktionary through `https://en.wiktionary.org/w/api.php`.
-5. Completed public dictionary records are cached for 30 days across users, so
-   repeated lookups of the same word do not call translation providers again.
+5. When the hosting runtime exposes a shared cache, completed public dictionary
+   records are cached for 30 days across users. Owner-scoped Supabase records
+   remain the durable cache on every supported runtime.
 6. The completed record is inserted once into the owner's Supabase collection.
    A case-insensitive unique database index is the race-safe duplicate guard.
 
 No generated fallback is substituted when a word or Arabic dictionary meaning
 cannot be found. The user receives a clear error and can try another spelling.
-The English dictionary and Wiktionary endpoints need no project API keys. A
-server-only `GOOGLE_CLOUD_TRANSLATE_API_KEY` enables the official Google Cloud
-Translation API for reliable Arabic rendering of definitions. Without it,
-MyMemory is attempted as a best-effort fallback. If only the optional Arabic
+The English dictionary, Wiktionary, and Datamuse endpoints currently need no
+project API keys. A server-only `GOOGLE_CLOUD_TRANSLATE_API_KEY` enables the
+official Google Cloud Translation API as the primary Arabic translator for the
+headword and definition. Wiktionary remains the curated headword fallback and
+MyMemory is attempted only after those sources. If only the optional Arabic
 definition translation is unavailable, the core English definition and short
 Arabic meaning still save instead of failing the entire lookup.
 

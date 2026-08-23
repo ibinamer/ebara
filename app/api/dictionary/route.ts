@@ -2,6 +2,7 @@ export const runtime = "edge";
 
 const FREE_DICTIONARY_BASE_URL =
   "https://api.dictionaryapi.dev/api/v2/entries/en/";
+const DATAMUSE_API_URL = "https://api.datamuse.com/words";
 const WIKTIONARY_API_URL = "https://en.wiktionary.org/w/api.php";
 // Wikimedia's robot policy requires a descriptive agent string on every request.
 const WIKIMEDIA_USER_AGENT = "EBARA/1.0 (personal vocabulary app; dictionary lookup)";
@@ -12,6 +13,7 @@ const MAX_BODY_BYTES = 2_048;
 const MAX_WORD_LENGTH = 80;
 const MAX_UPSTREAM_BYTES = 1_500_000;
 const REQUEST_TIMEOUT_MS = 12_000;
+const METADATA_TIMEOUT_MS = 2_500;
 const AUTH_TIMEOUT_MS = 8_000;
 // Every outbound call below is a single-shot request to a third-party service
 // EBARA does not control. A transient blip there (a 5xx, a dropped
@@ -134,6 +136,11 @@ type LookupDecision<T> = LookupSuccess<T> | LookupFailure;
 
 type EnglishDictionaryData = Omit<DictionaryResult, "meaning_ar" | "definition_ar">;
 
+type RankedEnglishDictionaryData = {
+  data: EnglishDictionaryData;
+  order: number;
+};
+
 type TranslationBox = {
   gloss: string;
   arabicTerms: string[];
@@ -254,11 +261,15 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Both sources are ordinary published dictionaries. Starting the independent
-  // reads together keeps the save interaction fast without generating content.
-  const [english, mainWikitext] = await Promise.all([
-    fetchEnglishDictionary(word),
+  // The dictionary, Wiktionary, and corpus-based part-of-speech metadata are
+  // independent reads. Datamuse ranks parts of speech by popularity in Google
+  // Books Ngrams, preventing rare senses such as the noun form of "high" from
+  // appearing before the everyday adjective.
+  const partOfSpeechRankingPromise = fetchPopularPartsOfSpeech(word);
+  const [english, mainWikitext, partOfSpeechRanking] = await Promise.all([
+    fetchEnglishDictionary(word, partOfSpeechRankingPromise),
     fetchWiktionaryWikitext(word),
+    partOfSpeechRankingPromise,
   ]);
 
   let englishData: EnglishDictionaryData;
@@ -274,7 +285,7 @@ export async function POST(request: Request): Promise<Response> {
     // there.
     const fromWiktionary =
       mainWikitext.ok && mainWikitext.data
-        ? parseWiktionaryDefinition(mainWikitext.data, word)
+        ? parseWiktionaryDefinition(mainWikitext.data, word, partOfSpeechRanking)
         : null;
     if (!fromWiktionary) return lookupErrorResponse(english, rate);
     englishData = fromWiktionary;
@@ -287,9 +298,9 @@ export async function POST(request: Request): Promise<Response> {
     englishData = { ...englishData, part_of_speech: "phrase" };
   }
 
-  // meaning_ar: a short headword-level gloss. Wiktionary's own translation
-  // tables give a real, curated dictionary answer when they have one; only
-  // fall back to machine-translating the bare word when they don't.
+  // meaning_ar: a short headword-level gloss. Google is the primary Arabic
+  // translator when configured. Wiktionary remains a curated fallback, and
+  // MyMemory is used only when neither source can complete the lookup.
   let meaningAr = mainWikitext.ok
     ? findArabicMeaning(mainWikitext.data, englishData.definition_en)
     : null;
@@ -304,18 +315,14 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // definition_ar is a different field entirely: a full Arabic translation
-  // of the definition sentence, not a short gloss. No dictionary source
-  // publishes ready-made definition translations, so this is always machine
-  // translation. It runs alongside whichever meaning_ar step is still
-  // outstanding rather than after it, since the two are independent.
-  const shortMeaningPromise: Promise<LookupDecision<string>> = meaningAr
-    ? Promise.resolve({ ok: true as const, data: meaningAr })
-    : translateToArabic(
-        englishData.part_of_speech.toLocaleLowerCase("en").includes("noun")
-          ? `a ${englishData.word}`
-          : englishData.word,
-      );
+  const meaningLookupText = translationHeadwordContext(
+    englishData.word,
+    englishData.part_of_speech,
+  );
+  const shortMeaningPromise = translateMeaningToArabic(
+    meaningLookupText,
+    meaningAr,
+  );
 
   const meaningDecision = await shortMeaningPromise;
 
@@ -355,6 +362,30 @@ async function translateToArabic(text: string): Promise<LookupDecision<string>> 
     if (google.ok) return google;
   }
   return fetchArabicTranslation(text);
+}
+
+async function translateMeaningToArabic(
+  text: string,
+  dictionaryFallback: string | null,
+): Promise<LookupDecision<string>> {
+  const googleApiKey = getRuntimeString("GOOGLE_CLOUD_TRANSLATE_API_KEY");
+  if (googleApiKey) {
+    const google = await fetchGoogleArabicTranslation(text, googleApiKey);
+    if (google.ok) return google;
+  }
+
+  if (dictionaryFallback) {
+    return { ok: true, data: dictionaryFallback };
+  }
+
+  return fetchArabicTranslation(text);
+}
+
+function translationHeadwordContext(word: string, partOfSpeech: string): string {
+  const normalizedPart = partOfSpeech.toLocaleLowerCase("en");
+  if (normalizedPart.includes("noun")) return `a ${word}`;
+  if (normalizedPart.includes("verb")) return `to ${word}`;
+  return word;
 }
 
 async function fetchGoogleArabicTranslation(
@@ -720,6 +751,7 @@ function parseWordPayload(payload: unknown): string | null {
 
 async function fetchEnglishDictionary(
   word: string,
+  partOfSpeechRankingPromise: Promise<string[]>,
 ): Promise<LookupDecision<EnglishDictionaryData>> {
   const url = `${FREE_DICTIONARY_BASE_URL}${encodeURIComponent(word)}`;
   const attempt = await fetchWithRetry(
@@ -785,7 +817,11 @@ async function fetchEnglishDictionary(
     );
   }
 
-  const parsed = parseFreeDictionaryResponse(json.data, word);
+  const parsed = parseFreeDictionaryResponse(
+    json.data,
+    word,
+    await partOfSpeechRankingPromise,
+  );
   if (!parsed) {
     return lookupFailure(
       "DICTIONARY_INVALID_RESPONSE",
@@ -800,12 +836,13 @@ async function fetchEnglishDictionary(
 function parseFreeDictionaryResponse(
   value: unknown,
   requestedWord: string,
+  partOfSpeechRanking: string[],
 ): EnglishDictionaryData | null {
   if (!Array.isArray(value) || value.length === 0) return null;
 
-  // The API publishes entries, meanings, and definitions in dictionary order.
-  // Choosing the first complete definition makes the primary/common sense
-  // deterministic instead of inventing a frequency ranking.
+  const candidates: RankedEnglishDictionaryData[] = [];
+  let order = 0;
+
   for (const entryValue of value) {
     if (!isRecord(entryValue)) continue;
 
@@ -826,21 +863,93 @@ function parseFreeDictionaryResponse(
 
         const pronunciation = phonetic ? stripIpaDelimiters(phonetic) : "";
 
-        return {
-          word: canonicalWord,
-          definition_en: definition,
-          pronunciation,
-          ipa: pronunciation ? `/${pronunciation}/` : "",
-          part_of_speech: partOfSpeech,
-          // No suggested example: the saved meaning is a translation of the
-          // definition itself, not a usage sentence.
-          example_sentence: "",
-        };
+        candidates.push({
+          order,
+          data: {
+            word: canonicalWord,
+            definition_en: definition,
+            pronunciation,
+            ipa: pronunciation ? `/${pronunciation}/` : "",
+            part_of_speech: partOfSpeech,
+            // No suggested example: the saved meaning is a translation of the
+            // definition itself, not a usage sentence.
+            example_sentence: "",
+          },
+        });
+        order += 1;
+        // The first definition within a part of speech is the dictionary's
+        // primary sense for that grammatical category.
+        break;
       }
     }
   }
 
-  return null;
+  candidates.sort(
+    (left, right) =>
+      partOfSpeechRank(left.data.part_of_speech, partOfSpeechRanking) -
+        partOfSpeechRank(right.data.part_of_speech, partOfSpeechRanking) ||
+      left.order - right.order,
+  );
+
+  return candidates[0]?.data ?? null;
+}
+
+async function fetchPopularPartsOfSpeech(word: string): Promise<string[]> {
+  const url = new URL(DATAMUSE_API_URL);
+  url.searchParams.set("sp", word);
+  url.searchParams.set("md", "p");
+  url.searchParams.set("max", "1");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), METADATA_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) return [];
+
+    const json = await readBoundedJson(response);
+    if (!json.ok || !Array.isArray(json.data) || json.data.length === 0) return [];
+
+    const first = json.data[0];
+    if (!isRecord(first) || normalizeDictionaryWord(first.word) !== word) return [];
+    if (!Array.isArray(first.tags)) return [];
+
+    const parts = first.tags
+      .map((tag) => datamusePartOfSpeech(tag))
+      .filter((part): part is string => Boolean(part));
+    return unique(parts);
+  } catch {
+    // Popularity metadata improves sense ordering but is never required for a
+    // dictionary lookup to succeed.
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function datamusePartOfSpeech(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return (
+    {
+      n: "noun",
+      v: "verb",
+      adj: "adjective",
+      adv: "adverb",
+    } as Record<string, string>
+  )[value] ?? null;
+}
+
+function partOfSpeechRank(
+  partOfSpeech: string,
+  ranking: string[],
+): number {
+  const normalized = partOfSpeech.trim().toLocaleLowerCase("en");
+  const rank = ranking.indexOf(normalized);
+  return rank >= 0 ? rank : ranking.length + 1;
 }
 
 function normalizeDictionaryWord(value: unknown): string | null {
@@ -1062,22 +1171,43 @@ const WIKTIONARY_PARTS_OF_SPEECH = new Map<string, string>([
 function parseWiktionaryDefinition(
   wikitext: string,
   term: string,
+  partOfSpeechRanking: string[],
 ): EnglishDictionaryData | null {
   const section = extractEnglishSection(wikitext);
   if (!section) return null;
 
   const headings = [...section.matchAll(/^={3,}\s*([A-Za-z ]+?)\s*={3,}\s*$/gmu)];
 
-  for (let index = 0; index < headings.length; index += 1) {
-    const heading = headings[index];
-    const partOfSpeech = WIKTIONARY_PARTS_OF_SPEECH.get(
-      (heading[1] ?? "").trim().toLowerCase(),
-    );
-    if (!partOfSpeech) continue;
+  const rankedSections = headings
+    .map((heading, index) => {
+      const partOfSpeech = WIKTIONARY_PARTS_OF_SPEECH.get(
+        (heading[1] ?? "").trim().toLowerCase(),
+      );
+      if (!partOfSpeech) return null;
 
-    const bodyStart = (heading.index ?? 0) + heading[0].length;
-    const bodyEnd = headings[index + 1]?.index ?? section.length;
-    const lines = section.slice(bodyStart, bodyEnd).split(/\r?\n/u);
+      const bodyStart = (heading.index ?? 0) + heading[0].length;
+      const bodyEnd = headings[index + 1]?.index ?? section.length;
+      return {
+        body: section.slice(bodyStart, bodyEnd),
+        order: index,
+        partOfSpeech,
+      };
+    })
+    .filter(
+      (
+        item,
+      ): item is { body: string; order: number; partOfSpeech: string } =>
+        item !== null,
+    )
+    .sort(
+      (left, right) =>
+        partOfSpeechRank(left.partOfSpeech, partOfSpeechRanking) -
+          partOfSpeechRank(right.partOfSpeech, partOfSpeechRanking) ||
+        left.order - right.order,
+    );
+
+  for (const rankedSection of rankedSections) {
+    const lines = rankedSection.body.split(/\r?\n/u);
 
     for (let line = 0; line < lines.length; line += 1) {
       // Senses are `# ...`; `#*`, `#:` and `##` are citations and sub-senses.
@@ -1094,7 +1224,7 @@ function parseWiktionaryDefinition(
         definition_en: definition,
         pronunciation: "",
         ipa: "",
-        part_of_speech: partOfSpeech,
+        part_of_speech: rankedSection.partOfSpeech,
         // No suggested example: the saved meaning is a translation of the
         // definition itself, not a usage sentence.
         example_sentence: "",

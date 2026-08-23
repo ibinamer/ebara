@@ -103,6 +103,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(app, /meaning_ar\.includes\(query\)/);
   assert.match(app, /fetch\(["']\/api\/dictionary["']/);
   assert.match(route, /https:\/\/api\.dictionaryapi\.dev\/api\/v2\/entries\/en\//);
+  assert.match(route, /https:\/\/api\.datamuse\.com\/words/);
   assert.match(route, /https:\/\/en\.wiktionary\.org\/w\/api\.php/);
   assert.match(route, /https:\/\/translation\.googleapis\.com\/language\/translate\/v2/);
   assert.match(route, /GOOGLE_CLOUD_TRANSLATE_API_KEY/);
@@ -124,7 +125,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     "const cached = await findCachedWord",
   );
   const externalLookupIndex = route.indexOf(
-    "const [english, mainWikitext] = await Promise.all",
+    "const [english, mainWikitext, partOfSpeechRanking] = await Promise.all",
   );
   assert.ok(serverCacheGuardIndex >= 0, "missing owner-scoped server cache guard");
   assert.ok(
@@ -267,6 +268,10 @@ test("saves a dictionary word when only the optional Arabic definition translati
       ]);
     }
 
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ word: "database", tags: ["n"] }]);
+    }
+
     if (url.hostname === "en.wiktionary.org") {
       return Response.json({
         parse: {
@@ -304,6 +309,108 @@ test("saves a dictionary word when only the optional Arabic definition translati
     assert.equal(payload.data.meaning_ar, "قاعدة بيانات");
     assert.equal(payload.data.definition_ar, "");
     assert.match(payload.data.definition_en, /organized collection/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
+});
+
+test("uses corpus popularity to select the common adjective sense of high", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+
+  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json([
+        {
+          word: "high",
+          phonetic: "/haɪ/",
+          meanings: [
+            {
+              partOfSpeech: "noun",
+              definitions: [
+                {
+                  definition:
+                    "A high point or position; an elevated place or superior region.",
+                },
+              ],
+            },
+            {
+              partOfSpeech: "adjective",
+              definitions: [
+                {
+                  definition:
+                    "Very elevated; extending or being far above a base; tall; lofty.",
+                },
+              ],
+            },
+          ],
+        },
+      ]);
+    }
+
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([
+        { word: "high", tags: ["adj", "adv", "n", "v"] },
+      ]);
+    }
+
+    if (url.hostname === "en.wiktionary.org") {
+      return Response.json({
+        parse: {
+          wikitext: [
+            "==English==",
+            "===Noun===",
+            "# A high point or position.",
+            "===Adjective===",
+            "# Very elevated; far above a base.",
+            "====Translations====",
+            "{{trans-top|a high point or position}}",
+            "* Arabic: {{t|ar|قمة}}",
+            "{{trans-bottom}}",
+            "{{trans-top|elevated; far above a base}}",
+            "* Arabic: {{t|ar|عالٍ}}",
+            "{{trans-bottom}}",
+          ].join("\\n"),
+        },
+      });
+    }
+
+    if (url.hostname === "api.mymemory.translated.net") {
+      if (url.searchParams.get("q") === "high") {
+        return Response.json({
+          responseData: { translatedText: "عالٍ" },
+        });
+      }
+      return Response.json({ message: "unavailable" }, { status: 503 });
+    }
+
+    throw new Error(`Unexpected external request in high test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("high");
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.data.word, "high");
+    assert.equal(payload.data.part_of_speech, "adjective");
+    assert.equal(payload.data.meaning_ar, "عالٍ");
+    assert.match(payload.data.definition_en, /very elevated/i);
+    assert.equal(payload.data.ipa, "/haɪ/");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalGoogleKey === undefined) {
