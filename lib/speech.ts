@@ -2,10 +2,32 @@ let activeAudio: HTMLAudioElement | null = null;
 
 function stopActiveAudio(): void {
   if (!activeAudio) return;
+  activeAudio.onerror = null;
+  activeAudio.onended = null;
   activeAudio.pause();
   activeAudio.removeAttribute("src");
   activeAudio.load();
   activeAudio = null;
+}
+
+function voiceScore(voice: SpeechSynthesisVoice): number {
+  const language = voice.lang.toLowerCase();
+  const name = voice.name.toLowerCase();
+  let score = language === "en-us" ? 100 : language.startsWith("en") ? 50 : 0;
+
+  if (/samantha|google us english|microsoft aria/.test(name)) score += 45;
+  else if (/ava|alex|karen|daniel/.test(name)) score += 35;
+  if (/premium|enhanced|natural/.test(name)) score += 25;
+  if (voice.localService) score += 5;
+  return score;
+}
+
+function bestEnglishVoice(): SpeechSynthesisVoice | undefined {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return undefined;
+  return window.speechSynthesis
+    .getVoices()
+    .filter((voice) => voice.lang.toLowerCase().startsWith("en"))
+    .sort((left, right) => voiceScore(right) - voiceScore(left))[0];
 }
 
 function speakWithBrowser(value: string): void {
@@ -14,45 +36,53 @@ function speakWithBrowser(value: string): void {
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(value);
   utterance.lang = "en-US";
-  utterance.rate = 0.86;
+  utterance.rate = 0.9;
+  utterance.pitch = 1;
+  const voice = bestEnglishVoice();
+  if (voice) utterance.voice = voice;
   window.speechSynthesis.speak(utterance);
 }
 
-/**
- * Plays the shared Chirp 3 HD pronunciation. If the hosted voice is not yet
- * configured or is temporarily unavailable, the device voice remains a
- * seamless fallback instead of making pronunciation fail.
- */
-export function speakWord(value: string): void {
+function trustedDictionaryAudioUrl(value: string | undefined): string | null {
+  if (!value) return null;
+
+  try {
+    const url = new URL(value);
+    const trustedHost =
+      url.hostname === "api.dictionaryapi.dev" ||
+      url.hostname === "ssl.gstatic.com";
+    return url.protocol === "https:" && trustedHost ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Plays dictionary audio first, then the best English device voice. */
+export function speakWord(value: string, dictionaryAudioUrl?: string): void {
   if (typeof window === "undefined") return;
 
   stopActiveAudio();
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 
-  const audio = new Audio(`/api/pronunciation?word=${encodeURIComponent(value)}`);
+  const source = trustedDictionaryAudioUrl(dictionaryAudioUrl);
+  if (!source) {
+    speakWithBrowser(value);
+    return;
+  }
+
+  const audio = new Audio(source);
   activeAudio = audio;
   audio.preload = "auto";
-  let finished = false;
-
-  const cleanup = () => {
-    if (activeAudio === audio) activeAudio = null;
-  };
   const fallback = () => {
-    if (finished) return;
-    finished = true;
-    cleanup();
+    if (activeAudio !== audio) return;
+    activeAudio = null;
     speakWithBrowser(value);
   };
 
-  audio.addEventListener(
-    "ended",
-    () => {
-      finished = true;
-      cleanup();
-    },
-    { once: true },
-  );
-  audio.addEventListener("error", fallback, { once: true });
+  audio.onended = () => {
+    if (activeAudio === audio) activeAudio = null;
+  };
+  audio.onerror = fallback;
   void audio.play().catch(fallback);
 }
 

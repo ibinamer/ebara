@@ -33,7 +33,7 @@ export function WordFacts({ entry }: { entry: DictionaryEntry }) {
               <p className="detail-label">{t("word.pronunciation")}</p>
               <button
                 type="button"
-                onClick={() => speakWord(entry.word)}
+                onClick={() => speakWord(entry.word, entry.audio_url)}
                 className="pronunciation-button mt-2"
                 aria-label={t("word.pronounce", { word: entry.word })}
               >

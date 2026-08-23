@@ -95,6 +95,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
     definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
+    audio_url: "",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -109,6 +110,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "The pleasant discovery of something valuable or interesting by chance.",
     definition_ar: "الاكتشاف السار لشيء قيّم أو مثير للاهتمام بالصدفة.",
     pronunciation: "ser-uhn-DIP-uh-tee",
+    audio_url: "",
     ipa: "/ˌser.ənˈdɪp.ə.ti/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -123,6 +125,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "So delicate or precise that it is difficult to notice or describe.",
     definition_ar: "دقيق أو خفي لدرجة يصعب معها ملاحظته أو وصفه.",
     pronunciation: "SUHT-l",
+    audio_url: "",
     ipa: "/ˈsʌt.əl/",
     part_of_speech: "adjective",
     example_sentence: "",
@@ -137,6 +140,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "Kind, calm, or soft in manner or effect.",
     definition_ar: "لطيف أو هادئ أو ناعم في الطريقة أو التأثير.",
     pronunciation: "JEN-tl",
+    audio_url: "",
     ipa: "/ˈdʒen.təl/",
     part_of_speech: "adjective",
     example_sentence: "",
@@ -152,6 +156,7 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
     definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
+    audio_url: "",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -162,6 +167,7 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
     definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
+    audio_url: "",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -172,6 +178,7 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
     definition_en: "Eager to know or learn something.",
     definition_ar: "متحمس لمعرفة أو تعلم شيء ما.",
     pronunciation: "KYOOR-ee-uhs",
+    audio_url: "",
     ipa: "/ˈkjʊə.ri.əs/",
     part_of_speech: "adjective",
     example_sentence: "",
@@ -196,6 +203,7 @@ function fallbackDictionaryEntry(value: string): DictionaryEntry {
     definition_en: "Dictionary details are available after the live services are connected.",
     definition_ar: "تفاصيل القاموس متاحة بعد الاتصال بالخدمات الفعلية.",
     pronunciation: "",
+    audio_url: "",
     ipa: "",
     part_of_speech: normalized.includes(" ") ? "phrase" : "word",
     example_sentence: "",
@@ -259,7 +267,7 @@ export default function Ebara({
     const { data, error } = await supabase
       .from("words")
       .select(
-        "id,user_id,word,meaning_ar,definition_en,definition_ar,pronunciation,ipa,part_of_speech,example_sentence,notes,created_at",
+        "id,user_id,word,meaning_ar,definition_en,definition_ar,pronunciation,audio_url,ipa,part_of_speech,example_sentence,notes,created_at",
       )
       .order("created_at", { ascending: false });
 
@@ -443,6 +451,7 @@ export default function Ebara({
         definition_en: dictionaryEntry.definition_en,
         definition_ar: dictionaryEntry.definition_ar,
         pronunciation: dictionaryEntry.pronunciation,
+        audio_url: dictionaryEntry.audio_url,
         ipa: dictionaryEntry.ipa,
         part_of_speech: dictionaryEntry.part_of_speech,
         example_sentence: dictionaryEntry.example_sentence,

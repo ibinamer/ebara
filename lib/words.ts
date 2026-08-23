@@ -8,6 +8,8 @@ export type WordRecord = {
   /** Full Arabic translation of definition_en — distinct from meaning_ar. */
   definition_ar: string;
   pronunciation: string;
+  /** Optional trusted pronunciation recording supplied by the dictionary. */
+  audio_url: string;
   ipa: string;
   part_of_speech: string;
   example_sentence: string;
@@ -25,6 +27,7 @@ export type DictionaryEntry = Pick<
   | "definition_en"
   | "definition_ar"
   | "pronunciation"
+  | "audio_url"
   | "ipa"
   | "part_of_speech"
   | "example_sentence"

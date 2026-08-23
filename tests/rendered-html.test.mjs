@@ -51,26 +51,6 @@ async function callDictionary(word) {
   );
 }
 
-async function callPronunciation(word, audioBucket) {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("pronunciation-test", `${process.pid}-${Date.now()}-${word}`);
-  const { default: worker } = await import(workerUrl.href);
-
-  return worker.fetch(
-    new Request(`http://localhost/api/pronunciation?word=${encodeURIComponent(word)}`),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-      AUDIO: audioBucket,
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
-}
-
 test("server-renders the EBARA preview or configured auth bootstrap", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -92,7 +72,18 @@ test("server-renders the EBARA preview or configured auth bootstrap", async () =
 });
 
 test("keeps auth, private persistence, and dictionary lookup in the product source", async () => {
-  const [app, settings, route, migration, envExample, readme, packageJson, deleteAccount] = await Promise.all([
+  const [
+    app,
+    settings,
+    route,
+    migration,
+    audioMigration,
+    speech,
+    envExample,
+    readme,
+    packageJson,
+    deleteAccount,
+  ] = await Promise.all([
     readFile(new URL("../app/vocabulary-box.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/SettingsDialog.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/dictionary/route.ts", import.meta.url), "utf8"),
@@ -103,6 +94,14 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
       ),
       "utf8",
     ),
+    readFile(
+      new URL(
+        "../supabase/migrations/20260823195227_add_dictionary_audio_url.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../lib/speech.ts", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -129,9 +128,18 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(route, /GOOGLE_CLOUD_TRANSLATE_API_KEY/);
   assert.match(route, /definition_ar: definitionDecision\.ok \? definitionDecision\.data : ""/);
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
+  assert.match(route, /normalizeDictionaryAudioUrl/);
+  assert.match(route, /audio_url/);
   assert.doesNotMatch(route, /translate\.googleapis\.com\/translate_a\/single/);
   assert.match(readme, /Free Dictionary API/);
   assert.match(readme, /MediaWiki Action API/);
+  assert.match(speech, /bestEnglishVoice/);
+  assert.match(speech, /api\.dictionaryapi\.dev/);
+  assert.match(speech, /ssl\.gstatic\.com/);
+  assert.doesNotMatch(speech, /Chirp|\/api\/pronunciation/);
+  assert.match(audioMigration, /add column audio_url text not null default ''/i);
+  assert.match(audioMigration, /api\[\.\]dictionaryapi\[\.\]dev/);
+  assert.match(audioMigration, /ssl\[\.\]gstatic\[\.\]com/);
 
   const duplicateGuardIndex = app.indexOf("const existingWord = savedWords.find");
   const dictionaryFetchIndex = app.search(/fetch\(["']\/api\/dictionary["']/);
@@ -165,6 +173,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     "meaning_ar",
     "definition_en",
     "pronunciation",
+    "audio_url",
     "ipa",
     "part_of_speech",
     "example_sentence",
@@ -251,6 +260,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     access(new URL("../public/google-translate-attribution.png", import.meta.url)),
   );
   await access(new URL("../supabase/migrations/20260801190000_initial_vocabulary_box.sql", import.meta.url));
+  await access(new URL("../supabase/migrations/20260823195227_add_dictionary_audio_url.sql", import.meta.url));
   await access(projectRoot);
 });
 
@@ -273,6 +283,12 @@ test("saves a dictionary word when only the optional Arabic definition translati
         {
           word: "database",
           phonetic: "/ˈdeɪtəˌbeɪs/",
+          phonetics: [
+            {
+              text: "/ˈdeɪtəˌbeɪs/",
+              audio: "//ssl.gstatic.com/dictionary/static/sounds/database.mp3",
+            },
+          ],
           meanings: [
             {
               partOfSpeech: "noun",
@@ -328,6 +344,10 @@ test("saves a dictionary word when only the optional Arabic definition translati
     assert.equal(payload.data.word, "database");
     assert.equal(payload.data.meaning_ar, "قاعدة بيانات");
     assert.equal(payload.data.definition_ar, "");
+    assert.equal(
+      payload.data.audio_url,
+      "https://ssl.gstatic.com/dictionary/static/sounds/database.mp3",
+    );
     assert.match(payload.data.definition_en, /organized collection/i);
   } finally {
     globalThis.fetch = originalFetch;
@@ -451,39 +471,4 @@ test("server-renders bilingual legal pages", async () => {
     assert.match(html, pathname === "/privacy" ? /Privacy notice/ : /Terms of use/);
     assert.match(html, /Last updated: 19 August 2026/);
   }
-});
-
-test("serves shared Chirp audio from cache and falls back safely when unconfigured", async () => {
-  const cachedAudio = new Uint8Array([73, 68, 51, 4, 0, 0]);
-  const requestedKeys = [];
-  const cachedResponse = await callPronunciation("High", {
-    async get(key) {
-      requestedKeys.push(key);
-      return {
-        body: new Response(cachedAudio).body,
-        httpEtag: '"audio-etag"',
-      };
-    },
-    async put() {
-      throw new Error("A cache hit must never regenerate audio.");
-    },
-  });
-
-  assert.equal(cachedResponse.status, 200);
-  assert.equal(cachedResponse.headers.get("content-type"), "audio/mpeg");
-  assert.equal(cachedResponse.headers.get("x-audio-cache"), "HIT");
-  assert.match(cachedResponse.headers.get("cache-control") ?? "", /immutable/);
-  assert.deepEqual(requestedKeys, ["v1/en-US-Chirp3-HD-Charon/high.mp3"]);
-  assert.deepEqual(new Uint8Array(await cachedResponse.arrayBuffer()), cachedAudio);
-
-  const fallbackResponse = await callPronunciation("database", {
-    async get() {
-      return null;
-    },
-    async put() {
-      throw new Error("Audio must not be stored without Google credentials.");
-    },
-  });
-  assert.equal(fallbackResponse.status, 503);
-  assert.equal(fallbackResponse.headers.get("x-pronunciation-fallback"), "browser");
 });

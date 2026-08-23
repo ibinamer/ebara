@@ -56,6 +56,7 @@ export type DictionaryResult = {
   // publishes ready-made definition translations.
   definition_ar: string;
   pronunciation: string;
+  audio_url: string;
   ipa: string;
   part_of_speech: string;
   example_sentence: string;
@@ -594,7 +595,7 @@ async function findCachedWord(
 
   url.searchParams.set(
     "select",
-    "word,meaning_ar,definition_en,definition_ar,pronunciation,ipa,part_of_speech,example_sentence",
+    "word,meaning_ar,definition_en,definition_ar,pronunciation,audio_url,ipa,part_of_speech,example_sentence",
   );
   // The explicit owner filter complements RLS and keeps the query indexable.
   // Input validation excludes ILIKE wildcard characters, so this is an exact,
@@ -701,6 +702,7 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
   // word until the user re-saves it.
   const definitionAr = optionalBoundedString(value.definition_ar, 1_500) ?? "";
   const pronunciation = optionalBoundedString(value.pronunciation, 160);
+  const audioUrl = normalizeDictionaryAudioUrl(value.audio_url ?? "");
   const ipa = optionalBoundedString(value.ipa, 180);
   const partOfSpeech = boundedString(value.part_of_speech, 80);
   const example = optionalBoundedString(value.example_sentence, 1_000);
@@ -711,6 +713,7 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
     !ARABIC_CHARACTER_PATTERN.test(meaningAr) ||
     !definition ||
     pronunciation === null ||
+    audioUrl === null ||
     ipa === null ||
     !partOfSpeech ||
     example === null
@@ -724,6 +727,7 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
     definition_en: definition,
     definition_ar: definitionAr,
     pronunciation,
+    audio_url: audioUrl,
     ipa,
     part_of_speech: partOfSpeech,
     example_sentence: example,
@@ -849,6 +853,7 @@ function parseFreeDictionaryResponse(
     const canonicalWord =
       normalizeDictionaryWord(entryValue.word) ?? requestedWord;
     const phonetic = findPhoneticText(entryValue, value);
+    const audioUrl = findPhoneticAudio(entryValue, value);
     if (!Array.isArray(entryValue.meanings)) continue;
 
     for (const meaningValue of entryValue.meanings) {
@@ -869,6 +874,7 @@ function parseFreeDictionaryResponse(
             word: canonicalWord,
             definition_en: definition,
             pronunciation,
+            audio_url: audioUrl ?? "",
             ipa: pronunciation ? `/${pronunciation}/` : "",
             part_of_speech: partOfSpeech,
             // No suggested example: the saved meaning is a translation of the
@@ -989,6 +995,52 @@ function phoneticCandidates(entry: Record<string, unknown>): unknown[] {
     if (isRecord(value)) candidates.push(value.text);
   }
   return candidates;
+}
+
+function findPhoneticAudio(
+  preferredEntry: Record<string, unknown>,
+  allEntries: unknown[],
+): string | null {
+  const preferred = phoneticAudioCandidates(preferredEntry);
+  for (const candidate of preferred) {
+    const normalized = normalizeDictionaryAudioUrl(candidate);
+    if (normalized) return normalized;
+  }
+
+  for (const entryValue of allEntries) {
+    if (!isRecord(entryValue) || entryValue === preferredEntry) continue;
+    for (const candidate of phoneticAudioCandidates(entryValue)) {
+      const normalized = normalizeDictionaryAudioUrl(candidate);
+      if (normalized) return normalized;
+    }
+  }
+
+  return null;
+}
+
+function phoneticAudioCandidates(entry: Record<string, unknown>): unknown[] {
+  if (!Array.isArray(entry.phonetics)) return [];
+  return entry.phonetics.flatMap((value) =>
+    isRecord(value) ? [value.audio] : [],
+  );
+}
+
+function normalizeDictionaryAudioUrl(value: unknown): string | null {
+  const raw = optionalBoundedString(value, 1_024);
+  if (raw === null) return null;
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw.startsWith("//") ? `https:${raw}` : raw);
+    const trustedHost =
+      url.hostname === "api.dictionaryapi.dev" ||
+      url.hostname === "ssl.gstatic.com";
+    if (url.protocol !== "https:" || !trustedHost || !url.pathname) return null;
+    url.hash = "";
+    return url.href;
+  } catch {
+    return null;
+  }
 }
 
 function normalizePhonetic(value: unknown): string | null {
@@ -1231,6 +1283,7 @@ function parseWiktionaryDefinition(
         word: term,
         definition_en: definition,
         pronunciation: "",
+        audio_url: "",
         ipa: "",
         part_of_speech: rankedSection.partOfSpeech,
         // No suggested example: the saved meaning is a translation of the
