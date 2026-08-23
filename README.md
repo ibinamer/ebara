@@ -35,6 +35,7 @@ games, streaks, chat, or other learning-platform features.
 | Auth & data | Supabase Auth and PostgreSQL with row-level security |
 | Build tooling | Vite 8, Wrangler |
 | Dictionary sources | Free Dictionary API, Wiktionary via the MediaWiki Action API |
+| Arabic definition translation | Google Cloud Translation (official, optional) with a best-effort MyMemory fallback |
 | Fonts | Playfair Display, IBM Plex Sans Arabic, IBM Plex Mono — self-hosted |
 
 No component library, no state-management library, no icon font. The only
@@ -253,12 +254,19 @@ generated text.
    primary meaning and definition are treated as the most common result.
 4. The server retrieves a matching Arabic dictionary meaning from English
    Wiktionary through `https://en.wiktionary.org/w/api.php`.
-5. The completed record is inserted once into the owner's Supabase collection.
+5. Completed public dictionary records are cached for 30 days across users, so
+   repeated lookups of the same word do not call translation providers again.
+6. The completed record is inserted once into the owner's Supabase collection.
    A case-insensitive unique database index is the race-safe duplicate guard.
 
 No generated fallback is substituted when a word or Arabic dictionary meaning
 cannot be found. The user receives a clear error and can try another spelling.
-The dictionary endpoints used by the server do not require project API keys.
+The English dictionary and Wiktionary endpoints need no project API keys. A
+server-only `GOOGLE_CLOUD_TRANSLATE_API_KEY` enables the official Google Cloud
+Translation API for reliable Arabic rendering of definitions. Without it,
+MyMemory is attempted as a best-effort fallback. If only the optional Arabic
+definition translation is unavailable, the core English definition and short
+Arabic meaning still save instead of failing the entire lookup.
 
 ## Voice privacy
 

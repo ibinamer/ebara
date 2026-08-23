@@ -5,8 +5,8 @@ const FREE_DICTIONARY_BASE_URL =
 const WIKTIONARY_API_URL = "https://en.wiktionary.org/w/api.php";
 // Wikimedia's robot policy requires a descriptive agent string on every request.
 const WIKIMEDIA_USER_AGENT = "EBARA/1.0 (personal vocabulary app; dictionary lookup)";
-const GOOGLE_TRANSLATE_PUBLIC_URL =
-  "https://translate.googleapis.com/translate_a/single";
+const GOOGLE_CLOUD_TRANSLATE_URL =
+  "https://translation.googleapis.com/language/translate/v2";
 const MYMEMORY_API_URL = "https://api.mymemory.translated.net/get";
 const MAX_BODY_BYTES = 2_048;
 const MAX_WORD_LENGTH = 80;
@@ -25,6 +25,7 @@ const RETRY_DELAY_MS = 350;
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
 const MAX_RATE_BUCKETS = 2_000;
+const SHARED_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 const MAX_TERM_WORDS = 6;
 
@@ -242,6 +243,17 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // Completed dictionary records contain no user data, so they can be shared
+  // safely across accounts. This avoids paying for or waiting on the same
+  // provider lookup again when another learner saves the same word.
+  const sharedCached = await findSharedDictionaryEntry(request, word);
+  if (sharedCached) {
+    return Response.json(
+      { ok: true as const, cached: true, data: sharedCached },
+      { status: 200, headers: responseHeaders(rate) },
+    );
+  }
+
   // Both sources are ordinary published dictionaries. Starting the independent
   // reads together keeps the save interaction fast without generating content.
   const [english, mainWikitext] = await Promise.all([
@@ -305,47 +317,67 @@ export async function POST(request: Request): Promise<Response> {
           : englishData.word,
       );
 
-  const [meaningDecision, definitionDecision] = await Promise.all([
-    shortMeaningPromise,
-    translateToArabic(englishData.definition_en),
-  ]);
+  const meaningDecision = await shortMeaningPromise;
 
   if (!meaningDecision.ok) return lookupErrorResponse(meaningDecision, rate);
-  if (!definitionDecision.ok) return lookupErrorResponse(definitionDecision, rate);
+
+  // The English definition and short Arabic meaning are the core record. A
+  // full Arabic rendering of the definition is useful, but an outage at a
+  // translation provider must not make the whole word impossible to save.
+  const definitionDecision = await translateToArabic(englishData.definition_en);
+  const data: DictionaryResult = {
+    ...englishData,
+    meaning_ar: meaningDecision.data,
+    definition_ar: definitionDecision.ok ? definitionDecision.data : "",
+  };
+
+  if (!definitionDecision.ok) {
+    reportTranslationFailure("all", "optional-definition-translation-failed");
+  }
+
+  await storeSharedDictionaryEntry(request, word, data);
 
   return Response.json(
     {
       ok: true as const,
       cached: false,
-      data: {
-        ...englishData,
-        meaning_ar: meaningDecision.data,
-        definition_ar: definitionDecision.data,
-      } satisfies DictionaryResult,
+      data,
     },
     { status: 200, headers: responseHeaders(rate) },
   );
 }
 
-/** Tries Google's translation endpoint first, MyMemory as the fallback. */
+/** Uses the official Google API when configured, then a free best-effort fallback. */
 async function translateToArabic(text: string): Promise<LookupDecision<string>> {
-  const google = await fetchGoogleArabicTranslation(text);
-  if (google.ok) return google;
+  const googleApiKey = getRuntimeString("GOOGLE_CLOUD_TRANSLATE_API_KEY");
+  if (googleApiKey) {
+    const google = await fetchGoogleArabicTranslation(text, googleApiKey);
+    if (google.ok) return google;
+  }
   return fetchArabicTranslation(text);
 }
 
 async function fetchGoogleArabicTranslation(
   text: string,
+  apiKey: string,
 ): Promise<LookupDecision<string>> {
-  const url = new URL(GOOGLE_TRANSLATE_PUBLIC_URL);
-  url.searchParams.set("client", "gtx");
-  url.searchParams.set("sl", "en");
-  url.searchParams.set("tl", "ar");
-  url.searchParams.set("dt", "t");
-  url.searchParams.set("q", text);
+  const url = new URL(GOOGLE_CLOUD_TRANSLATE_URL);
+  url.searchParams.set("key", apiKey);
 
-  const attempt = await fetchWithRetry(url, {}, REQUEST_TIMEOUT_MS);
+  const attempt = await fetchWithRetry(
+    url,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ q: text, source: "en", target: "ar", format: "text" }),
+    },
+    REQUEST_TIMEOUT_MS,
+  );
   if (!attempt.ok) {
+    reportTranslationFailure("google-cloud", "network-or-timeout");
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service is temporarily unavailable.",
@@ -355,6 +387,7 @@ async function fetchGoogleArabicTranslation(
   const response = attempt.response;
 
   if (!response.ok) {
+    reportTranslationFailure("google-cloud", "http-error", response.status);
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service could not complete this lookup.",
@@ -363,23 +396,14 @@ async function fetchGoogleArabicTranslation(
   }
 
   const json = await readBoundedJson(response);
-  const responseData = json.ok ? json.data : null;
-  // A short word translates as a single segment, but Google's endpoint
-  // splits a full sentence definition into several — `responseData[0]` is an
-  // array of `[translatedChunk, originalChunk, ...]` tuples, one per clause.
-  // Reading only the first entry, as a single-word lookup safely could, would
-  // silently truncate any definition with more than one clause or sentence.
-  const segments = Array.isArray(responseData) ? responseData[0] : null;
-  const translated = Array.isArray(segments)
-    ? boundedString(
-        segments
-          .map((segment) => (Array.isArray(segment) ? segment[0] : null))
-          .filter((piece): piece is string => typeof piece === "string")
-          .join(""),
-        512,
-      )
+  const responseData = json.ok && isRecord(json.data) ? json.data.data : null;
+  const translations = isRecord(responseData) ? responseData.translations : null;
+  const firstTranslation = Array.isArray(translations) ? translations[0] : null;
+  const translated = isRecord(firstTranslation)
+    ? boundedString(firstTranslation.translatedText, 512)
     : null;
   if (!translated || !ARABIC_CHARACTER_PATTERN.test(translated)) {
+    reportTranslationFailure("google-cloud", "invalid-response");
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "No Arabic meaning was found for this word.",
@@ -402,6 +426,7 @@ async function fetchArabicTranslation(
     REQUEST_TIMEOUT_MS,
   );
   if (!attempt.ok) {
+    reportTranslationFailure("mymemory", "network-or-timeout");
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service is temporarily unavailable.",
@@ -411,6 +436,7 @@ async function fetchArabicTranslation(
   const response = attempt.response;
 
   if (!response.ok) {
+    reportTranslationFailure("mymemory", "http-error", response.status);
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service could not complete this lookup.",
@@ -420,6 +446,7 @@ async function fetchArabicTranslation(
 
   const json = await readBoundedJson(response);
   if (!json.ok || !isRecord(json.data) || !isRecord(json.data.responseData)) {
+    reportTranslationFailure("mymemory", "invalid-response");
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service returned an unreadable response.",
@@ -432,6 +459,7 @@ async function fetchArabicTranslation(
     512,
   );
   if (!translated || !ARABIC_CHARACTER_PATTERN.test(translated)) {
+    reportTranslationFailure("mymemory", "no-arabic-result");
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "No Arabic meaning was found for this word.",
@@ -440,6 +468,84 @@ async function fetchArabicTranslation(
   }
 
   return { ok: true, data: translated };
+}
+
+type SharedDictionaryCache = {
+  match(request: Request): Promise<Response | undefined>;
+  put(request: Request, response: Response): Promise<void>;
+};
+
+function sharedDictionaryCache(): SharedDictionaryCache | null {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    caches?: { default?: SharedDictionaryCache };
+  };
+  return runtimeGlobal.caches?.default ?? null;
+}
+
+function sharedDictionaryCacheKey(request: Request, word: string): Request | null {
+  try {
+    const url = new URL(request.url);
+    url.pathname = `/__ebara-cache/dictionary/${encodeURIComponent(word)}`;
+    url.search = "";
+    url.hash = "";
+    return new Request(url, { method: "GET" });
+  } catch {
+    return null;
+  }
+}
+
+async function findSharedDictionaryEntry(
+  request: Request,
+  word: string,
+): Promise<DictionaryResult | null> {
+  const cache = sharedDictionaryCache();
+  const key = sharedDictionaryCacheKey(request, word);
+  if (!cache || !key) return null;
+
+  try {
+    const response = await cache.match(key);
+    if (!response?.ok) return null;
+    const json = await readBoundedJson(response);
+    return json.ok ? parseCachedDictionaryResult(json.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function storeSharedDictionaryEntry(
+  request: Request,
+  word: string,
+  data: DictionaryResult,
+): Promise<void> {
+  const cache = sharedDictionaryCache();
+  const key = sharedDictionaryCacheKey(request, word);
+  if (!cache || !key) return;
+
+  try {
+    await cache.put(
+      key,
+      Response.json(data, {
+        headers: {
+          "Cache-Control": `public, max-age=${SHARED_CACHE_MAX_AGE_SECONDS}`,
+        },
+      }),
+    );
+  } catch {
+    // Cache availability must never block a dictionary lookup.
+  }
+}
+
+function reportTranslationFailure(
+  provider: "google-cloud" | "mymemory" | "all",
+  reason: string,
+  status?: number,
+): void {
+  // Never log the word, definition, API key, or user information.
+  console.warn("Arabic translation provider failed", {
+    provider,
+    reason,
+    ...(status ? { status } : {}),
+  });
 }
 
 async function findCachedWord(
@@ -1425,7 +1531,8 @@ function supabaseWordsEndpoint(value: string): URL | null {
 
 function getRuntimeString(name: string): string | null {
   // Vinext's Workers config exposes text variables through process.env when
-  // nodejs_compat is enabled. No service keys are needed for either dictionary.
+  // nodejs_compat is enabled. Server-only translation credentials are read
+  // here and are never included in the browser bundle.
   const runtimeGlobal = globalThis as typeof globalThis & {
     process?: { env?: Record<string, string | undefined> };
   };

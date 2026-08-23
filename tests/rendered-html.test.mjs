@@ -25,6 +25,32 @@ async function render(pathname = "/") {
   );
 }
 
+async function callDictionary(word) {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("dictionary-test", `${process.pid}-${Date.now()}-${word}`);
+  const { default: worker } = await import(workerUrl.href);
+
+  return worker.fetch(
+    new Request("http://localhost/api/dictionary", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ word }),
+    }),
+    {
+      ASSETS: {
+        fetch: async () => new Response("Not found", { status: 404 }),
+      },
+    },
+    {
+      waitUntil() {},
+      passThroughOnException() {},
+    },
+  );
+}
+
 test("server-renders the EBARA preview or configured auth bootstrap", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -78,6 +104,11 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(app, /fetch\(["']\/api\/dictionary["']/);
   assert.match(route, /https:\/\/api\.dictionaryapi\.dev\/api\/v2\/entries\/en\//);
   assert.match(route, /https:\/\/en\.wiktionary\.org\/w\/api\.php/);
+  assert.match(route, /https:\/\/translation\.googleapis\.com\/language\/translate\/v2/);
+  assert.match(route, /GOOGLE_CLOUD_TRANSLATE_API_KEY/);
+  assert.match(route, /definition_ar: definitionDecision\.ok \? definitionDecision\.data : ""/);
+  assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
+  assert.doesNotMatch(route, /translate\.googleapis\.com\/translate_a\/single/);
   assert.match(readme, /Free Dictionary API/);
   assert.match(readme, /MediaWiki Action API/);
 
@@ -185,7 +216,8 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     [app, route, migration, envExample, readme, packageJson].join("\n"),
     /OpenAI|Anthropic|Gemini|\bLLM\b|Google Translate|\bAI\b/i,
   );
-  assert.doesNotMatch(envExample, /(?:DICTIONARY|WIKTIONARY|TRANSLATE).*API_KEY/i);
+  assert.match(envExample, /^GOOGLE_CLOUD_TRANSLATE_API_KEY=/m);
+  assert.doesNotMatch(envExample, /^NEXT_PUBLIC_GOOGLE_CLOUD_TRANSLATE_API_KEY=/m);
   assert.doesNotMatch(wordsTable, /^  (?:level|example1|example2)\s/gim);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 
@@ -199,6 +231,87 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   );
   await access(new URL("../supabase/migrations/20260801190000_initial_vocabulary_box.sql", import.meta.url));
   await access(projectRoot);
+});
+
+test("saves a dictionary word when only the optional Arabic definition translation fails", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+
+  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json([
+        {
+          word: "database",
+          phonetic: "/ˈdeɪtəˌbeɪs/",
+          meanings: [
+            {
+              partOfSpeech: "noun",
+              definitions: [
+                {
+                  definition:
+                    "An organized collection of structured information stored electronically.",
+                },
+              ],
+            },
+          ],
+        },
+      ]);
+    }
+
+    if (url.hostname === "en.wiktionary.org") {
+      return Response.json({
+        parse: {
+          wikitext: [
+            "==English==",
+            "===Noun===",
+            "# An organized collection of structured information.",
+            "====Translations====",
+            "{{trans-top|organized collection of information}}",
+            "* Arabic: {{t|ar|قاعدة بيانات}}",
+            "{{trans-bottom}}",
+          ].join("\\n"),
+        },
+      });
+    }
+
+    if (url.hostname === "api.mymemory.translated.net") {
+      if (url.searchParams.get("q") === "a database") {
+        return Response.json({
+          responseData: { translatedText: "قاعدة بيانات" },
+        });
+      }
+      return Response.json({ message: "unavailable" }, { status: 503 });
+    }
+
+    throw new Error(`Unexpected external request in dictionary test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("database");
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.ok, true);
+    assert.equal(payload.data.word, "database");
+    assert.equal(payload.data.meaning_ar, "قاعدة بيانات");
+    assert.equal(payload.data.definition_ar, "");
+    assert.match(payload.data.definition_en, /organized collection/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
 });
 
 test("server-renders bilingual legal pages", async () => {
