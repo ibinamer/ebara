@@ -2,10 +2,10 @@ import {
   getRuntimeD1Database,
   type D1DatabaseBinding,
 } from "../lib/runtime-bindings";
-import { GOOGLE_TRANSLATION_USAGE_TABLE_SQL } from "./schema";
+import { AZURE_TRANSLATION_USAGE_TABLE_SQL } from "./schema";
 
-export const GOOGLE_TRANSLATION_WARNING_CHARACTERS = 400_000;
-export const GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS = 450_000;
+export const AZURE_TRANSLATION_WARNING_CHARACTERS = 1_800_000;
+export const AZURE_TRANSLATION_HARD_LIMIT_CHARACTERS = 1_900_000;
 
 type D1ResultRow = Record<string, unknown>;
 
@@ -13,7 +13,7 @@ type UsageRow = D1ResultRow & {
   characters_used: number;
 };
 
-export type GoogleTranslationReservation =
+export type AzureTranslationReservation =
   | {
       allowed: true;
       characters: number;
@@ -36,14 +36,14 @@ function currentUtcMonth(date = new Date()): string {
   return date.toISOString().slice(0, 7);
 }
 
-/** Google bills translation input by Unicode code point, not UTF-16 unit. */
-export function countGoogleTranslationCharacters(text: string): number {
+/** Azure Translator meters the number of input characters sent to the service. */
+export function countAzureTranslationCharacters(text: string): number {
   return Array.from(text).length;
 }
 
 async function ensureSchema(database: D1DatabaseBinding): Promise<void> {
   schemaReady ??= database
-    .prepare(GOOGLE_TRANSLATION_USAGE_TABLE_SQL)
+    .prepare(AZURE_TRANSLATION_USAGE_TABLE_SQL)
     .run()
     .then(() => undefined)
     .catch((error) => {
@@ -54,15 +54,16 @@ async function ensureSchema(database: D1DatabaseBinding): Promise<void> {
 }
 
 /**
- * Atomically reserves the characters before Google is contacted. A failed
- * upstream request remains counted because the text was already sent and may
- * still be billable. When D1 is unavailable, Google is deliberately skipped.
+ * Reserves characters atomically before Azure is contacted. Retried requests
+ * are reserved again because every attempt can be metered by the provider.
+ * If D1 is unavailable, Azure is skipped so a meter outage cannot create an
+ * unbounded bill.
  */
-export async function reserveGoogleTranslationCharacters(
+export async function reserveAzureTranslationCharacters(
   text: string,
   date = new Date(),
-): Promise<GoogleTranslationReservation> {
-  const characters = countGoogleTranslationCharacters(text);
+): Promise<AzureTranslationReservation> {
+  const characters = countAzureTranslationCharacters(text);
   const database = getDatabase();
   if (!database) {
     return { allowed: false, characters, reason: "meter-unavailable" };
@@ -73,7 +74,7 @@ export async function reserveGoogleTranslationCharacters(
     const monthKey = currentUtcMonth(date);
     const usage = await database
       .prepare(
-        `INSERT INTO google_translation_usage (
+        `INSERT INTO azure_translation_usage (
           month_key,
           characters_used,
           warning_emitted,
@@ -83,17 +84,17 @@ export async function reserveGoogleTranslationCharacters(
         SELECT ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         WHERE ? <= ?
         ON CONFLICT(month_key) DO UPDATE SET
-          characters_used = google_translation_usage.characters_used + excluded.characters_used,
+          characters_used = azure_translation_usage.characters_used + excluded.characters_used,
           updated_at = CURRENT_TIMESTAMP
-        WHERE google_translation_usage.characters_used + excluded.characters_used <= ?
+        WHERE azure_translation_usage.characters_used + excluded.characters_used <= ?
         RETURNING characters_used`,
       )
       .bind(
         monthKey,
         characters,
         characters,
-        GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS,
-        GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS,
+        AZURE_TRANSLATION_HARD_LIMIT_CHARACTERS,
+        AZURE_TRANSLATION_HARD_LIMIT_CHARACTERS,
       )
       .first<UsageRow>();
 
@@ -102,17 +103,17 @@ export async function reserveGoogleTranslationCharacters(
     }
 
     let warningJustReached = false;
-    if (usage.characters_used >= GOOGLE_TRANSLATION_WARNING_CHARACTERS) {
+    if (usage.characters_used >= AZURE_TRANSLATION_WARNING_CHARACTERS) {
       const warning = await database
         .prepare(
-          `UPDATE google_translation_usage
+          `UPDATE azure_translation_usage
           SET warning_emitted = 1, updated_at = CURRENT_TIMESTAMP
           WHERE month_key = ?
             AND characters_used >= ?
             AND warning_emitted = 0
           RETURNING characters_used`,
         )
-        .bind(monthKey, GOOGLE_TRANSLATION_WARNING_CHARACTERS)
+        .bind(monthKey, AZURE_TRANSLATION_WARNING_CHARACTERS)
         .first<UsageRow>();
       warningJustReached = Boolean(warning);
     }

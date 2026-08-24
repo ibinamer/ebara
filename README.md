@@ -37,7 +37,7 @@ games, streaks, chat, or other learning-platform features.
 | Auth & data | Supabase Auth and PostgreSQL with row-level security |
 | Build tooling | Vite 8, Wrangler |
 | Dictionary sources | Free Dictionary API, Wiktionary via the MediaWiki Action API, Datamuse part-of-speech popularity metadata |
-| Arabic definition translation | Google Cloud Translation (official, optional) with a best-effort MyMemory fallback |
+| Arabic dictionary & translation | Azure Translator Dictionary Lookup and Text Translation (official, optional), Wiktionary, and a best-effort MyMemory fallback |
 | Fonts | Playfair Display, IBM Plex Sans Arabic, IBM Plex Mono — self-hosted |
 
 No component library, no state-management library, no icon font. The only
@@ -84,7 +84,8 @@ key is never placed in this repository or exposed to the browser.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | For accounts | Supabase anon/publishable key |
 | `NEXT_PUBLIC_LEGAL_OPERATOR_NAME` | Public launch | Legal name of the service operator shown in the legal pages |
 | `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | Public launch | Monitored address for privacy and support requests |
-| `GOOGLE_CLOUD_TRANSLATE_API_KEY` | Optional | Server-only Google Cloud Translation key; never exposed to the browser |
+| `AZURE_TRANSLATOR_KEY` | Optional | Server-only Azure Translator key; never exposed to the browser |
+| `AZURE_TRANSLATOR_REGION` | Optional | Azure resource region; required for regional or multi-service resources |
 
 `SUPABASE_URL` and `SUPABASE_ANON_KEY` are accepted as fallbacks for hosts that
 do not forward `NEXT_PUBLIC_` variables.
@@ -92,13 +93,14 @@ do not forward `NEXT_PUBLIC_` variables.
 Find both under **Project Settings → API** in the Supabase dashboard. Never
 commit `.env.local`; `.gitignore` already excludes it.
 
-When the Google key is configured, Sites D1 tracks the number of Unicode
-characters sent to Google for each UTC calendar month. EBARA records a warning
-at **400,000** characters and atomically stops sending text to Google at
-**450,000** characters. It then continues through Wiktionary, MyMemory, or the
-existing manual-Arabic fallback instead of failing the word lookup. The meter
-deliberately counts a reserved request even if Google later times out, because
-the text was already sent and may still be billable.
+When the Azure key is configured, Sites D1 tracks the number of Unicode
+characters sent to Azure for each UTC calendar month. EBARA records a warning
+at **1,800,000** characters and atomically stops sending text to Azure at
+**1,900,000** characters, leaving a safety buffer below the F0 allowance. It
+then continues through Wiktionary, MyMemory, or the existing manual-Arabic
+fallback instead of failing the word lookup. The meter deliberately counts a
+reserved request even if Azure later times out, because the text was already
+sent and may still be metered.
 
 ## Database setup
 
@@ -114,9 +116,9 @@ the text was already sent and may still be billable.
    `SUPABASE_SERVICE_ROLE_KEY` to the function runtime. Never copy the service
    role key into a `NEXT_PUBLIC_` variable.
 
-The operational Google-usage meter is separate from Supabase user data. Sites
+The operational Azure-usage meter is separate from Supabase user data. Sites
 creates its private D1 binding from the hosting manifest; the matching schema is
-in `db/schema.ts` and `drizzle/0000_google_translation_usage.sql`.
+in `db/schema.ts` and `drizzle/0001_azure_translation_usage.sql`.
 
 ## Public launch checklist
 
@@ -269,21 +271,25 @@ generated text.
    parts of speech by popularity in Google Books Ngrams, and the server selects
    the first dictionary definition inside the most popular category. This keeps
    an everyday adjective such as `high` from opening on its rare noun sense.
-4. The server retrieves a matching Arabic dictionary meaning from English
-   Wiktionary through `https://en.wiktionary.org/w/api.php`.
-5. When the hosting runtime exposes a shared cache, completed public dictionary
+4. When Azure is configured, Dictionary Lookup selects a short Arabic meaning
+   that matches the English entry's part of speech. Wiktionary remains the
+   curated fallback through `https://en.wiktionary.org/w/api.php`.
+5. Azure Text Translation translates the selected English definition into
+   Arabic. MyMemory is attempted only if Azure is unavailable or the protected
+   monthly cap has been reached.
+6. When the hosting runtime exposes a shared cache, completed public dictionary
    records are cached for 30 days across users. Owner-scoped Supabase records
    remain the durable cache on every supported runtime.
-6. The completed record is inserted once into the owner's Supabase collection.
+7. The completed record is inserted once into the owner's Supabase collection.
    A case-insensitive unique database index is the race-safe duplicate guard.
 
 No generated fallback is substituted when a word or Arabic dictionary meaning
 cannot be found. The user receives a clear error and can try another spelling.
 The English dictionary, Wiktionary, and Datamuse endpoints currently need no
-project API keys. A server-only `GOOGLE_CLOUD_TRANSLATE_API_KEY` enables the
-official Google Cloud Translation API as the primary Arabic translator for the
-headword and definition. Wiktionary remains the curated headword fallback and
-MyMemory is attempted only after those sources. If only the optional Arabic
+project API keys. Server-only `AZURE_TRANSLATOR_KEY` and
+`AZURE_TRANSLATOR_REGION` values enable Azure's sense-aware Dictionary Lookup
+and definition translation. Wiktionary remains the curated headword fallback,
+and MyMemory is attempted only after those sources. If only the optional Arabic
 definition translation is unavailable, the core English definition and short
 Arabic meaning still save instead of failing the entire lookup.
 

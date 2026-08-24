@@ -1,8 +1,8 @@
 import {
-  GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS,
-  GOOGLE_TRANSLATION_WARNING_CHARACTERS,
-  reserveGoogleTranslationCharacters,
-} from "../../../db/google-translation-usage";
+  AZURE_TRANSLATION_HARD_LIMIT_CHARACTERS,
+  AZURE_TRANSLATION_WARNING_CHARACTERS,
+  reserveAzureTranslationCharacters,
+} from "../../../db/azure-translation-usage";
 
 export const runtime = "edge";
 
@@ -12,8 +12,8 @@ const DATAMUSE_API_URL = "https://api.datamuse.com/words";
 const WIKTIONARY_API_URL = "https://en.wiktionary.org/w/api.php";
 // Wikimedia's robot policy requires a descriptive agent string on every request.
 const WIKIMEDIA_USER_AGENT = "EBARA/1.0 (personal vocabulary app; dictionary lookup)";
-const GOOGLE_CLOUD_TRANSLATE_URL =
-  "https://translation.googleapis.com/language/translate/v2";
+const AZURE_TRANSLATOR_BASE_URL =
+  "https://api.cognitive.microsofttranslator.com";
 const MYMEMORY_API_URL = "https://api.mymemory.translated.net/get";
 const MAX_BODY_BYTES = 2_048;
 const MAX_WORD_LENGTH = 80;
@@ -153,6 +153,11 @@ type TranslationBox = {
   arabicTerms: string[];
   languageCount: number;
   order: number;
+};
+
+type AzureTranslatorCredentials = {
+  key: string;
+  region: string | null;
 };
 
 const rateBuckets = new Map<string, RateBucket>();
@@ -324,12 +329,22 @@ export async function POST(request: Request): Promise<Response> {
     englishData = { ...englishData, part_of_speech: "phrase" };
   }
 
-  // meaning_ar: a short headword-level gloss. Google is the primary Arabic
-  // translator when configured. Wiktionary remains a curated fallback, and
-  // MyMemory is used only when neither source can complete the lookup.
-  let meaningAr = mainWikitext.ok
-    ? findArabicMeaning(mainWikitext.data, englishData.definition_en)
+  // meaning_ar is a short headword-level gloss, not a translated sentence.
+  // Azure Dictionary Lookup is sense-aware and returns part-of-speech tags, so
+  // it is tried first when configured. Wiktionary remains the curated fallback.
+  const azureCredentials = getAzureTranslatorCredentials();
+  const azureDictionaryMeaning = azureCredentials
+    ? await fetchAzureDictionaryMeaning(
+        englishData.word,
+        englishData.part_of_speech,
+        azureCredentials,
+      )
     : null;
+  let meaningAr = azureDictionaryMeaning?.ok
+    ? azureDictionaryMeaning.data
+    : mainWikitext.ok
+      ? findArabicMeaning(mainWikitext.data, englishData.definition_en)
+      : null;
 
   if (!meaningAr) {
     // Large Wiktionary entries sometimes move translation tables to a
@@ -350,10 +365,9 @@ export async function POST(request: Request): Promise<Response> {
         englishData.word,
         englishData.part_of_speech,
       );
-  const shortMeaningPromise = translateMeaningToArabic(
-    meaningLookupText,
-    meaningAr,
-  );
+  const shortMeaningPromise = meaningAr
+    ? Promise.resolve<LookupDecision<string>>({ ok: true, data: meaningAr })
+    : translateToArabic(meaningLookupText);
 
   const meaningDecision = await shortMeaningPromise;
   const needsArabicMeaning = !meaningDecision.ok;
@@ -398,31 +412,23 @@ export async function POST(request: Request): Promise<Response> {
   );
 }
 
-/** Uses the official Google API when configured, then a free best-effort fallback. */
+/** Uses the official Azure service when configured, then a free fallback. */
 async function translateToArabic(text: string): Promise<LookupDecision<string>> {
-  const googleApiKey = getRuntimeString("GOOGLE_CLOUD_TRANSLATE_API_KEY");
-  if (googleApiKey) {
-    const google = await fetchGoogleArabicTranslation(text, googleApiKey);
-    if (google.ok) return google;
+  const credentials = getAzureTranslatorCredentials();
+  if (credentials) {
+    const azure = await fetchAzureArabicTranslation(text, credentials);
+    if (azure.ok) return azure;
   }
   return fetchArabicTranslation(text);
 }
 
-async function translateMeaningToArabic(
-  text: string,
-  dictionaryFallback: string | null,
-): Promise<LookupDecision<string>> {
-  const googleApiKey = getRuntimeString("GOOGLE_CLOUD_TRANSLATE_API_KEY");
-  if (googleApiKey) {
-    const google = await fetchGoogleArabicTranslation(text, googleApiKey);
-    if (google.ok) return google;
-  }
-
-  if (dictionaryFallback) {
-    return { ok: true, data: dictionaryFallback };
-  }
-
-  return fetchArabicTranslation(text);
+function getAzureTranslatorCredentials(): AzureTranslatorCredentials | null {
+  const key = getRuntimeString("AZURE_TRANSLATOR_KEY");
+  if (!key) return null;
+  return {
+    key,
+    region: getRuntimeString("AZURE_TRANSLATOR_REGION"),
+  };
 }
 
 function translationHeadwordContext(word: string, partOfSpeech: string): string {
@@ -432,43 +438,56 @@ function translationHeadwordContext(word: string, partOfSpeech: string): string 
   return word;
 }
 
-async function fetchGoogleArabicTranslation(
+function azureTranslatorHeaders(
+  credentials: AzureTranslatorCredentials,
+): Headers {
+  const headers = new Headers({
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "Ocp-Apim-Subscription-Key": credentials.key,
+  });
+  if (credentials.region) {
+    headers.set("Ocp-Apim-Subscription-Region", credentials.region);
+  }
+  return headers;
+}
+
+async function reserveAzureRequest(text: string): Promise<boolean> {
+  const reservation = await reserveAzureTranslationCharacters(text);
+  if (!reservation.allowed) {
+    reportTranslationFailure("azure-translator", reservation.reason);
+    return false;
+  }
+
+  if (reservation.warningJustReached) {
+    console.warn(
+      `[translation-usage] Monthly Azure usage reached ${reservation.charactersUsed} characters; warning threshold is ${AZURE_TRANSLATION_WARNING_CHARACTERS} and the hard stop is ${AZURE_TRANSLATION_HARD_LIMIT_CHARACTERS}.`,
+    );
+  }
+  return true;
+}
+
+async function fetchAzureArabicTranslation(
   text: string,
-  apiKey: string,
+  credentials: AzureTranslatorCredentials,
 ): Promise<LookupDecision<string>> {
-  const url = new URL(GOOGLE_CLOUD_TRANSLATE_URL);
-  url.searchParams.set("key", apiKey);
-
-  const reserveAttempt = async (): Promise<boolean> => {
-    const reservation = await reserveGoogleTranslationCharacters(text);
-    if (!reservation.allowed) {
-      reportTranslationFailure("google-cloud", reservation.reason);
-      return false;
-    }
-
-    if (reservation.warningJustReached) {
-      console.warn(
-        `[translation-usage] Monthly Google usage reached ${reservation.charactersUsed} characters; warning threshold is ${GOOGLE_TRANSLATION_WARNING_CHARACTERS} and the hard stop is ${GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS}.`,
-      );
-    }
-    return true;
-  };
+  const url = new URL("/translate", AZURE_TRANSLATOR_BASE_URL);
+  url.searchParams.set("api-version", "3.0");
+  url.searchParams.set("from", "en");
+  url.searchParams.set("to", "ar");
 
   const attempt = await fetchWithRetry(
     url,
     {
       method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ q: text, source: "en", target: "ar", format: "text" }),
+      headers: azureTranslatorHeaders(credentials),
+      body: JSON.stringify([{ Text: text }]),
     },
     REQUEST_TIMEOUT_MS,
-    reserveAttempt,
+    () => reserveAzureRequest(text),
   );
   if (!attempt.ok) {
-    reportTranslationFailure("google-cloud", "network-or-timeout");
+    reportTranslationFailure("azure-translator", "network-or-timeout");
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service is temporarily unavailable.",
@@ -478,7 +497,7 @@ async function fetchGoogleArabicTranslation(
   const response = attempt.response;
 
   if (!response.ok) {
-    reportTranslationFailure("google-cloud", "http-error", response.status);
+    reportTranslationFailure("azure-translator", "http-error", response.status);
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "The Arabic translation service could not complete this lookup.",
@@ -487,14 +506,14 @@ async function fetchGoogleArabicTranslation(
   }
 
   const json = await readBoundedJson(response);
-  const responseData = json.ok && isRecord(json.data) ? json.data.data : null;
-  const translations = isRecord(responseData) ? responseData.translations : null;
+  const firstResult = json.ok && Array.isArray(json.data) ? json.data[0] : null;
+  const translations = isRecord(firstResult) ? firstResult.translations : null;
   const firstTranslation = Array.isArray(translations) ? translations[0] : null;
   const translated = isRecord(firstTranslation)
-    ? boundedString(firstTranslation.translatedText, 512)
+    ? boundedString(firstTranslation.text, 1_500)
     : null;
   if (!translated || !ARABIC_CHARACTER_PATTERN.test(translated)) {
-    reportTranslationFailure("google-cloud", "invalid-response");
+    reportTranslationFailure("azure-translator", "invalid-response");
     return lookupFailure(
       "ARABIC_MEANING_NOT_FOUND",
       "No Arabic meaning was found for this word.",
@@ -502,6 +521,129 @@ async function fetchGoogleArabicTranslation(
     );
   }
   return { ok: true, data: translated };
+}
+
+async function fetchAzureDictionaryMeaning(
+  term: string,
+  partOfSpeech: string,
+  credentials: AzureTranslatorCredentials,
+): Promise<LookupDecision<string>> {
+  const url = new URL("/dictionary/lookup", AZURE_TRANSLATOR_BASE_URL);
+  url.searchParams.set("api-version", "3.0");
+  url.searchParams.set("from", "en");
+  url.searchParams.set("to", "ar");
+
+  const attempt = await fetchWithRetry(
+    url,
+    {
+      method: "POST",
+      headers: azureTranslatorHeaders(credentials),
+      body: JSON.stringify([{ Text: term }]),
+    },
+    REQUEST_TIMEOUT_MS,
+    () => reserveAzureRequest(term),
+  );
+  if (!attempt.ok) {
+    reportTranslationFailure("azure-translator", "dictionary-network-or-timeout");
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "The Arabic dictionary is temporarily unavailable.",
+      502,
+    );
+  }
+
+  if (!attempt.response.ok) {
+    reportTranslationFailure(
+      "azure-translator",
+      "dictionary-http-error",
+      attempt.response.status,
+    );
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "The Arabic dictionary could not complete this lookup.",
+      502,
+    );
+  }
+
+  const json = await readBoundedJson(attempt.response);
+  const meaning = json.ok
+    ? selectAzureDictionaryMeaning(json.data, term, partOfSpeech)
+    : null;
+  if (!meaning) {
+    return lookupFailure(
+      "ARABIC_MEANING_NOT_FOUND",
+      "No Arabic dictionary meaning was found for this word.",
+      422,
+    );
+  }
+  return { ok: true, data: meaning };
+}
+
+function selectAzureDictionaryMeaning(
+  value: unknown,
+  requestedTerm: string,
+  partOfSpeech: string,
+): string | null {
+  if (!Array.isArray(value) || !isRecord(value[0])) return null;
+  const translations = value[0].translations;
+  if (!Array.isArray(translations)) return null;
+
+  const expectedTag = azurePartOfSpeechTag(partOfSpeech);
+  const candidates = translations.flatMap((translation, order) => {
+    if (!isRecord(translation)) return [];
+    const displayTarget = boundedString(translation.displayTarget, 512);
+    if (!displayTarget || !ARABIC_CHARACTER_PATTERN.test(displayTarget)) return [];
+
+    const posTag = boundedString(translation.posTag, 16)?.toUpperCase() ?? "";
+    const confidence =
+      typeof translation.confidence === "number" &&
+      Number.isFinite(translation.confidence)
+        ? Math.max(0, Math.min(1, translation.confidence))
+        : 0;
+    const exactBackTranslation = Array.isArray(translation.backTranslations)
+      ? translation.backTranslations.some(
+          (backTranslation) =>
+            isRecord(backTranslation) &&
+            boundedString(backTranslation.normalizedText, MAX_WORD_LENGTH)
+              ?.toLocaleLowerCase("en") === requestedTerm.toLocaleLowerCase("en"),
+        )
+      : false;
+
+    return [
+      {
+        displayTarget,
+        posTag,
+        order,
+        score:
+          (expectedTag && posTag === expectedTag ? 1_000 : 0) +
+          (exactBackTranslation ? 100 : 0) +
+          confidence * 10,
+      },
+    ];
+  });
+  if (candidates.length === 0) return null;
+
+  const matchingPartOfSpeech = expectedTag
+    ? candidates.filter((candidate) => candidate.posTag === expectedTag)
+    : candidates;
+  const ranked = matchingPartOfSpeech.length > 0
+    ? matchingPartOfSpeech
+    : candidates;
+  ranked.sort((left, right) => right.score - left.score || left.order - right.order);
+  return ranked[0]?.displayTarget ?? null;
+}
+
+function azurePartOfSpeechTag(partOfSpeech: string): string | null {
+  const normalized = partOfSpeech.trim().toLocaleLowerCase("en");
+  if (normalized.includes("adjective")) return "ADJ";
+  if (normalized.includes("adverb")) return "ADV";
+  if (normalized.includes("conjunction")) return "CONJ";
+  if (normalized.includes("determiner")) return "DET";
+  if (normalized.includes("noun")) return "NOUN";
+  if (normalized.includes("preposition")) return "PREP";
+  if (normalized.includes("pronoun")) return "PRON";
+  if (normalized.includes("verb")) return "VERB";
+  return null;
 }
 
 async function fetchArabicTranslation(
@@ -627,7 +769,7 @@ async function storeSharedDictionaryEntry(
 }
 
 function reportTranslationFailure(
-  provider: "google-cloud" | "mymemory" | "all",
+  provider: "azure-translator" | "mymemory" | "all",
   reason: string,
   status?: number,
 ): void {

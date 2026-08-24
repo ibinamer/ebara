@@ -55,7 +55,7 @@ async function callDictionary(word, bindings = {}) {
 function createUsageDatabase(initialCharacters = 0) {
   const state = {
     charactersUsed: initialCharacters,
-    warningEmitted: initialCharacters >= 400_000,
+    warningEmitted: initialCharacters >= 1_800_000,
   };
 
   return {
@@ -68,18 +68,18 @@ function createUsageDatabase(initialCharacters = 0) {
           return this;
         },
         async run() {
-          assert.match(query, /CREATE TABLE IF NOT EXISTS google_translation_usage/);
+          assert.match(query, /CREATE TABLE IF NOT EXISTS azure_translation_usage/);
           return { success: true };
         },
         async first() {
-          if (/INSERT INTO google_translation_usage/.test(query)) {
+          if (/INSERT INTO azure_translation_usage/.test(query)) {
             const characters = Number(values[1]);
-            if (state.charactersUsed + characters > 450_000) return null;
+            if (state.charactersUsed + characters > 1_900_000) return null;
             state.charactersUsed += characters;
             return { characters_used: state.charactersUsed };
           }
-          if (/UPDATE google_translation_usage/.test(query)) {
-            if (state.charactersUsed < 400_000 || state.warningEmitted) return null;
+          if (/UPDATE azure_translation_usage/.test(query)) {
+            if (state.charactersUsed < 1_800_000 || state.warningEmitted) return null;
             state.warningEmitted = true;
             return { characters_used: state.charactersUsed };
           }
@@ -145,9 +145,9 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
       "utf8",
     ),
     readFile(new URL("../lib/speech.ts", import.meta.url), "utf8"),
-    readFile(new URL("../db/google-translation-usage.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/azure-translation-usage.ts", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
-    readFile(new URL("../drizzle/0000_google_translation_usage.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0001_azure_translation_usage.sql", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
@@ -174,16 +174,18 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(route, /https:\/\/api\.dictionaryapi\.dev\/api\/v2\/entries\/en\//);
   assert.match(route, /https:\/\/api\.datamuse\.com\/words/);
   assert.match(route, /https:\/\/en\.wiktionary\.org\/w\/api\.php/);
-  assert.match(route, /https:\/\/translation\.googleapis\.com\/language\/translate\/v2/);
-  assert.match(route, /GOOGLE_CLOUD_TRANSLATE_API_KEY/);
-  assert.match(route, /reserveGoogleTranslationCharacters\(text\)/);
-  assert.match(usageMeter, /GOOGLE_TRANSLATION_WARNING_CHARACTERS = 400_000/);
-  assert.match(usageMeter, /GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS = 450_000/);
+  assert.match(route, /https:\/\/api\.cognitive\.microsofttranslator\.com/);
+  assert.match(route, /AZURE_TRANSLATOR_KEY/);
+  assert.match(route, /AZURE_TRANSLATOR_REGION/);
+  assert.match(route, /\/dictionary\/lookup/);
+  assert.match(route, /reserveAzureTranslationCharacters\(text\)/);
+  assert.match(usageMeter, /AZURE_TRANSLATION_WARNING_CHARACTERS = 1_800_000/);
+  assert.match(usageMeter, /AZURE_TRANSLATION_HARD_LIMIT_CHARACTERS = 1_900_000/);
   assert.match(usageMeter, /Array\.from\(text\)\.length/);
   assert.match(usageMeter, /ON CONFLICT\(month_key\) DO UPDATE/);
   assert.match(usageMeter, /reason: "meter-unavailable"/);
-  assert.match(usageSchema, /CREATE TABLE IF NOT EXISTS google_translation_usage/);
-  assert.match(usageMigration, /characters_used[^]*450000/);
+  assert.match(usageSchema, /CREATE TABLE IF NOT EXISTS azure_translation_usage/);
+  assert.match(usageMigration, /characters_used[^]*1900000/);
   assert.match(hostingConfig, /"d1": "DB"/);
   assert.match(
     route,
@@ -196,7 +198,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
   assert.match(route, /normalizeDictionaryAudioUrl/);
   assert.match(route, /audio_url/);
-  assert.doesNotMatch(route, /translate\.googleapis\.com\/translate_a\/single/);
+  assert.doesNotMatch(route, /translation\.googleapis\.com/);
   assert.match(readme, /Free Dictionary API/);
   assert.match(readme, /MediaWiki Action API/);
   assert.match(speech, /bestEnglishVoice/);
@@ -312,8 +314,9 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     [app, route, migration, envExample, readme, packageJson].join("\n"),
     /OpenAI|Anthropic|Gemini|\bLLM\b|Google Translate|\bAI\b/i,
   );
-  assert.match(envExample, /^GOOGLE_CLOUD_TRANSLATE_API_KEY=/m);
-  assert.doesNotMatch(envExample, /^NEXT_PUBLIC_GOOGLE_CLOUD_TRANSLATE_API_KEY=/m);
+  assert.match(envExample, /^AZURE_TRANSLATOR_KEY=/m);
+  assert.match(envExample, /^AZURE_TRANSLATOR_REGION=/m);
+  assert.doesNotMatch(envExample, /^NEXT_PUBLIC_AZURE_TRANSLATOR_KEY=/m);
   assert.doesNotMatch(wordsTable, /^  (?:level|example1|example2)\s/gim);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 
@@ -330,16 +333,18 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   await access(projectRoot);
 });
 
-test("counts Google characters in D1 and emits the monthly warning once", async () => {
+test("selects Azure dictionary meanings by part of speech and meters every attempt", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
+  const originalAzureRegion = process.env.AZURE_TRANSLATOR_REGION;
   const originalWarn = console.warn;
-  const database = createUsageDatabase(399_990);
-  const googleInputs = [];
+  const database = createUsageDatabase(1_799_990);
+  const azureInputs = [];
   const warnings = [];
-  let firstGoogleAttempt = true;
+  let firstDictionaryAttempt = true;
 
-  process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = "test-server-only-key";
+  process.env.AZURE_TRANSLATOR_KEY = "test-server-only-key";
+  process.env.AZURE_TRANSLATOR_REGION = "global";
   console.warn = (...values) => warnings.push(values.join(" "));
   globalThis.fetch = async (input, init) => {
     const url = new URL(
@@ -380,25 +385,50 @@ test("counts Google characters in D1 and emits the monthly warning once", async 
         },
       });
     }
-    if (url.hostname === "translation.googleapis.com") {
+    if (url.hostname === "api.cognitive.microsofttranslator.com") {
       const requestBody = JSON.parse(String(init?.body));
-      googleInputs.push(requestBody.q);
-      if (firstGoogleAttempt) {
-        firstGoogleAttempt = false;
-        return Response.json({ error: "temporary" }, { status: 503 });
+      const text = requestBody[0].Text;
+      azureInputs.push(text);
+      assert.equal(init?.headers.get("Ocp-Apim-Subscription-Key"), "test-server-only-key");
+      assert.equal(init?.headers.get("Ocp-Apim-Subscription-Region"), "global");
+
+      if (url.pathname === "/dictionary/lookup") {
+        if (firstDictionaryAttempt) {
+          firstDictionaryAttempt = false;
+          return Response.json({ error: "temporary" }, { status: 503 });
+        }
+        return Response.json([
+          {
+            normalizedSource: "meter",
+            translations: [
+              {
+                displayTarget: "يَقيس",
+                posTag: "VERB",
+                confidence: 0.99,
+                backTranslations: [{ normalizedText: "meter" }],
+              },
+              {
+                displayTarget: "مِقياس",
+                posTag: "NOUN",
+                confidence: 0.7,
+                backTranslations: [{ normalizedText: "meter" }],
+              },
+            ],
+          },
+        ]);
       }
-      return Response.json({
-        data: {
-          translations: [
-            {
-              translatedText:
-                requestBody.q === "a meter"
-                  ? "مِقياس"
-                  : "جهاز يستخدم لقياس شيء ما.",
-            },
-          ],
-        },
-      });
+
+      if (url.pathname === "/translate") {
+        return Response.json([
+          {
+            translations: [
+              { text: "جهاز يستخدم لقياس شيء ما.", to: "ar" },
+            ],
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected Azure endpoint: ${url.pathname}`);
     }
     throw new Error(`Unexpected external request in usage-warning test: ${url}`);
   };
@@ -409,36 +439,41 @@ test("counts Google characters in D1 and emits the monthly warning once", async 
     assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.data.meaning_ar, "مِقياس");
     assert.equal(payload.data.definition_ar, "جهاز يستخدم لقياس شيء ما.");
-    assert.deepEqual(googleInputs, [
-      "a meter",
-      "a meter",
+    assert.deepEqual(azureInputs, [
+      "meter",
+      "meter",
       "A device used to measure something.",
     ]);
     assert.equal(
       database.state.charactersUsed,
-      399_990 + googleInputs.reduce((total, value) => total + Array.from(value).length, 0),
+      1_799_990 + azureInputs.reduce((total, value) => total + Array.from(value).length, 0),
     );
     assert.equal(database.state.warningEmitted, true);
     assert.equal(warnings.filter((message) => message.includes("warning threshold")).length, 1);
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
+    }
+    if (originalAzureRegion === undefined) {
+      delete process.env.AZURE_TRANSLATOR_REGION;
+    } else {
+      process.env.AZURE_TRANSLATOR_REGION = originalAzureRegion;
     }
   }
 });
 
-test("hard-stops Google at 450k characters and silently uses the fallback", async () => {
+test("hard-stops Azure before 1.9M characters and silently uses the fallback", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
-  const database = createUsageDatabase(449_995);
-  let googleCalls = 0;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
+  const database = createUsageDatabase(1_899_999);
+  let azureCalls = 0;
   let fallbackCalls = 0;
 
-  process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = "test-server-only-key";
+  process.env.AZURE_TRANSLATOR_KEY = "test-server-only-key";
   globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string"
@@ -477,9 +512,9 @@ test("hard-stops Google at 450k characters and silently uses the fallback", asyn
         },
       });
     }
-    if (url.hostname === "translation.googleapis.com") {
-      googleCalls += 1;
-      throw new Error("Google must not be called after the protected cap");
+    if (url.hostname === "api.cognitive.microsofttranslator.com") {
+      azureCalls += 1;
+      throw new Error("Azure must not be called after the protected cap");
     }
     if (url.hostname === "api.mymemory.translated.net") {
       fallbackCalls += 1;
@@ -500,24 +535,24 @@ test("hard-stops Google at 450k characters and silently uses the fallback", asyn
     assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.data.meaning_ar, "حِصّة");
     assert.equal(payload.data.definition_ar, "عدد أو مقدار محدود أو ثابت.");
-    assert.equal(googleCalls, 0);
+    assert.equal(azureCalls, 0);
     assert.equal(fallbackCalls, 2);
-    assert.equal(database.state.charactersUsed, 449_995);
+    assert.equal(database.state.charactersUsed, 1_899_999);
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
   }
 });
 
 test("saves a dictionary word when only the optional Arabic definition translation fails", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
 
-  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
   globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string"
@@ -600,19 +635,19 @@ test("saves a dictionary word when only the optional Arabic definition translati
     assert.match(payload.data.definition_en, /organized collection/i);
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
   }
 });
 
 test("uses corpus popularity to select the common adjective sense of high", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
 
-  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
   globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string"
@@ -703,20 +738,20 @@ test("uses corpus popularity to select the common adjective sense of high", asyn
     assert.equal(payload.data.ipa, "/haɪ/");
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
   }
 });
 
 test("reads trans-top-see Arabic meanings without falling through to translation", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
   let myMemoryCalls = 0;
 
-  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
   globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string"
@@ -785,19 +820,19 @@ test("reads trans-top-see Arabic meanings without falling through to translation
     assert.equal(myMemoryCalls, 1);
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
   }
 });
 
 test("returns English dictionary facts for manual Arabic entry when translators fail", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
 
-  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
   globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string"
@@ -848,17 +883,17 @@ test("returns English dictionary facts for manual Arabic entry when translators 
     assert.match(payload.data.definition_en, /alternative/i);
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
   }
 });
 
 test("expands template-only Wiktionary definitions for ordinary phrases", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
   const expandedPages = [];
 
   const phraseDefinitions = new Map([
@@ -882,7 +917,7 @@ test("expands template-only Wiktionary definitions for ordinary phrases", async 
     ],
   ]);
 
-  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
   globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string"
@@ -948,19 +983,19 @@ test("expands template-only Wiktionary definitions for ordinary phrases", async 
     assert.deepEqual(expandedPages.sort(), [...phraseDefinitions.keys()].sort());
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
   }
 });
 
 test("uses translation coverage to prefer the broadly documented phrase sense", async () => {
   const originalFetch = globalThis.fetch;
-  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
 
-  delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
   globalThis.fetch = async (input) => {
     const url = new URL(
       typeof input === "string"
@@ -1033,10 +1068,10 @@ test("uses translation coverage to prefer the broadly documented phrase sense", 
     assert.equal(payload.data.meaning_ar, "لَحِقَ");
   } finally {
     globalThis.fetch = originalFetch;
-    if (originalGoogleKey === undefined) {
-      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
     } else {
-      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
   }
 });
