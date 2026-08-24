@@ -1,3 +1,9 @@
+import {
+  GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS,
+  GOOGLE_TRANSLATION_WARNING_CHARACTERS,
+  reserveGoogleTranslationCharacters,
+} from "../../../db/google-translation-usage";
+
 export const runtime = "edge";
 
 const FREE_DICTIONARY_BASE_URL =
@@ -433,6 +439,21 @@ async function fetchGoogleArabicTranslation(
   const url = new URL(GOOGLE_CLOUD_TRANSLATE_URL);
   url.searchParams.set("key", apiKey);
 
+  const reserveAttempt = async (): Promise<boolean> => {
+    const reservation = await reserveGoogleTranslationCharacters(text);
+    if (!reservation.allowed) {
+      reportTranslationFailure("google-cloud", reservation.reason);
+      return false;
+    }
+
+    if (reservation.warningJustReached) {
+      console.warn(
+        `[translation-usage] Monthly Google usage reached ${reservation.charactersUsed} characters; warning threshold is ${GOOGLE_TRANSLATION_WARNING_CHARACTERS} and the hard stop is ${GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS}.`,
+      );
+    }
+    return true;
+  };
+
   const attempt = await fetchWithRetry(
     url,
     {
@@ -444,6 +465,7 @@ async function fetchGoogleArabicTranslation(
       body: JSON.stringify({ q: text, source: "en", target: "ar", format: "text" }),
     },
     REQUEST_TIMEOUT_MS,
+    reserveAttempt,
   );
   if (!attempt.ok) {
     reportTranslationFailure("google-cloud", "network-or-timeout");
@@ -1991,11 +2013,13 @@ async function fetchWithRetry(
   url: string | URL,
   init: RequestInit,
   timeoutMs: number,
+  beforeAttempt?: () => Promise<boolean>,
   attempts: number = FETCH_ATTEMPTS,
 ): Promise<FetchAttempt> {
   let last: FetchAttempt = { ok: false, timedOut: false };
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (beforeAttempt && !(await beforeAttempt())) return last;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {

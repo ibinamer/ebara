@@ -84,12 +84,21 @@ key is never placed in this repository or exposed to the browser.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | For accounts | Supabase anon/publishable key |
 | `NEXT_PUBLIC_LEGAL_OPERATOR_NAME` | Public launch | Legal name of the service operator shown in the legal pages |
 | `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | Public launch | Monitored address for privacy and support requests |
+| `GOOGLE_CLOUD_TRANSLATE_API_KEY` | Optional | Server-only Google Cloud Translation key; never exposed to the browser |
 
 `SUPABASE_URL` and `SUPABASE_ANON_KEY` are accepted as fallbacks for hosts that
 do not forward `NEXT_PUBLIC_` variables.
 
 Find both under **Project Settings → API** in the Supabase dashboard. Never
 commit `.env.local`; `.gitignore` already excludes it.
+
+When the Google key is configured, Sites D1 tracks the number of Unicode
+characters sent to Google for each UTC calendar month. EBARA records a warning
+at **400,000** characters and atomically stops sending text to Google at
+**450,000** characters. It then continues through Wiktionary, MyMemory, or the
+existing manual-Arabic fallback instead of failing the word lookup. The meter
+deliberately counts a reserved request even if Google later times out, because
+the text was already sent and may still be billable.
 
 ## Database setup
 
@@ -104,6 +113,10 @@ commit `.env.local`; `.gitignore` already excludes it.
    Supabase provides `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
    `SUPABASE_SERVICE_ROLE_KEY` to the function runtime. Never copy the service
    role key into a `NEXT_PUBLIC_` variable.
+
+The operational Google-usage meter is separate from Supabase user data. Sites
+creates its private D1 binding from the hosting manifest; the matching schema is
+in `db/schema.ts` and `drizzle/0000_google_translation_usage.sql`.
 
 ## Public launch checklist
 

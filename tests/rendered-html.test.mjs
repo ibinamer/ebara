@@ -25,7 +25,7 @@ async function render(pathname = "/") {
   );
 }
 
-async function callDictionary(word) {
+async function callDictionary(word, bindings = {}) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("dictionary-test", `${process.pid}-${Date.now()}-${word}`);
   const { default: worker } = await import(workerUrl.href);
@@ -43,12 +43,51 @@ async function callDictionary(word) {
       ASSETS: {
         fetch: async () => new Response("Not found", { status: 404 }),
       },
+      ...bindings,
     },
     {
       waitUntil() {},
       passThroughOnException() {},
     },
   );
+}
+
+function createUsageDatabase(initialCharacters = 0) {
+  const state = {
+    charactersUsed: initialCharacters,
+    warningEmitted: initialCharacters >= 400_000,
+  };
+
+  return {
+    state,
+    prepare(query) {
+      let values = [];
+      return {
+        bind(...nextValues) {
+          values = nextValues;
+          return this;
+        },
+        async run() {
+          assert.match(query, /CREATE TABLE IF NOT EXISTS google_translation_usage/);
+          return { success: true };
+        },
+        async first() {
+          if (/INSERT INTO google_translation_usage/.test(query)) {
+            const characters = Number(values[1]);
+            if (state.charactersUsed + characters > 450_000) return null;
+            state.charactersUsed += characters;
+            return { characters_used: state.charactersUsed };
+          }
+          if (/UPDATE google_translation_usage/.test(query)) {
+            if (state.charactersUsed < 400_000 || state.warningEmitted) return null;
+            state.warningEmitted = true;
+            return { characters_used: state.charactersUsed };
+          }
+          throw new Error(`Unexpected D1 statement: ${query}`);
+        },
+      };
+    },
+  };
 }
 
 test("server-renders the EBARA preview or configured auth bootstrap", async () => {
@@ -79,6 +118,10 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     migration,
     audioMigration,
     speech,
+    usageMeter,
+    usageSchema,
+    usageMigration,
+    hostingConfig,
     envExample,
     readme,
     packageJson,
@@ -102,6 +145,10 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
       "utf8",
     ),
     readFile(new URL("../lib/speech.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/google-translation-usage.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0000_google_translation_usage.sql", import.meta.url), "utf8"),
+    readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -129,6 +176,15 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(route, /https:\/\/en\.wiktionary\.org\/w\/api\.php/);
   assert.match(route, /https:\/\/translation\.googleapis\.com\/language\/translate\/v2/);
   assert.match(route, /GOOGLE_CLOUD_TRANSLATE_API_KEY/);
+  assert.match(route, /reserveGoogleTranslationCharacters\(text\)/);
+  assert.match(usageMeter, /GOOGLE_TRANSLATION_WARNING_CHARACTERS = 400_000/);
+  assert.match(usageMeter, /GOOGLE_TRANSLATION_HARD_LIMIT_CHARACTERS = 450_000/);
+  assert.match(usageMeter, /Array\.from\(text\)\.length/);
+  assert.match(usageMeter, /ON CONFLICT\(month_key\) DO UPDATE/);
+  assert.match(usageMeter, /reason: "meter-unavailable"/);
+  assert.match(usageSchema, /CREATE TABLE IF NOT EXISTS google_translation_usage/);
+  assert.match(usageMigration, /characters_used[^]*450000/);
+  assert.match(hostingConfig, /"d1": "DB"/);
   assert.match(
     route,
     /definition_ar: definitionDecision\?\.ok \? definitionDecision\.data : ""/,
@@ -272,6 +328,189 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   await access(new URL("../supabase/migrations/20260801190000_initial_vocabulary_box.sql", import.meta.url));
   await access(new URL("../supabase/migrations/20260823195227_add_dictionary_audio_url.sql", import.meta.url));
   await access(projectRoot);
+});
+
+test("counts Google characters in D1 and emits the monthly warning once", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const originalWarn = console.warn;
+  const database = createUsageDatabase(399_990);
+  const googleInputs = [];
+  const warnings = [];
+  let firstGoogleAttempt = true;
+
+  process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = "test-server-only-key";
+  console.warn = (...values) => warnings.push(values.join(" "));
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json([
+        {
+          word: "meter",
+          phonetic: "/ˈmiːtə/",
+          meanings: [
+            {
+              partOfSpeech: "noun",
+              definitions: [
+                { definition: "A device used to measure something." },
+              ],
+            },
+          ],
+        },
+      ]);
+    }
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ word: "meter", tags: ["n"] }]);
+    }
+    if (url.hostname === "en.wiktionary.org") {
+      const page = url.searchParams.get("page") ?? "";
+      if (page.endsWith("/translations")) {
+        return Response.json({ error: { code: "missingtitle" } });
+      }
+      return Response.json({
+        parse: {
+          wikitext: "==English==\n===Noun===\n# A device used to measure something.",
+        },
+      });
+    }
+    if (url.hostname === "translation.googleapis.com") {
+      const requestBody = JSON.parse(String(init?.body));
+      googleInputs.push(requestBody.q);
+      if (firstGoogleAttempt) {
+        firstGoogleAttempt = false;
+        return Response.json({ error: "temporary" }, { status: 503 });
+      }
+      return Response.json({
+        data: {
+          translations: [
+            {
+              translatedText:
+                requestBody.q === "a meter"
+                  ? "مِقياس"
+                  : "جهاز يستخدم لقياس شيء ما.",
+            },
+          ],
+        },
+      });
+    }
+    throw new Error(`Unexpected external request in usage-warning test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("meter", { DB: database });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.data.meaning_ar, "مِقياس");
+    assert.equal(payload.data.definition_ar, "جهاز يستخدم لقياس شيء ما.");
+    assert.deepEqual(googleInputs, [
+      "a meter",
+      "a meter",
+      "A device used to measure something.",
+    ]);
+    assert.equal(
+      database.state.charactersUsed,
+      399_990 + googleInputs.reduce((total, value) => total + Array.from(value).length, 0),
+    );
+    assert.equal(database.state.warningEmitted, true);
+    assert.equal(warnings.filter((message) => message.includes("warning threshold")).length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
+});
+
+test("hard-stops Google at 450k characters and silently uses the fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGoogleKey = process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+  const database = createUsageDatabase(449_995);
+  let googleCalls = 0;
+  let fallbackCalls = 0;
+
+  process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = "test-server-only-key";
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json([
+        {
+          word: "quota",
+          meanings: [
+            {
+              partOfSpeech: "noun",
+              definitions: [
+                { definition: "A limited or fixed number or amount." },
+              ],
+            },
+          ],
+        },
+      ]);
+    }
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ word: "quota", tags: ["n"] }]);
+    }
+    if (url.hostname === "en.wiktionary.org") {
+      const page = url.searchParams.get("page") ?? "";
+      if (page.endsWith("/translations")) {
+        return Response.json({ error: { code: "missingtitle" } });
+      }
+      return Response.json({
+        parse: {
+          wikitext: "==English==\n===Noun===\n# A limited or fixed number or amount.",
+        },
+      });
+    }
+    if (url.hostname === "translation.googleapis.com") {
+      googleCalls += 1;
+      throw new Error("Google must not be called after the protected cap");
+    }
+    if (url.hostname === "api.mymemory.translated.net") {
+      fallbackCalls += 1;
+      const query = url.searchParams.get("q");
+      return Response.json({
+        responseData: {
+          translatedText:
+            query === "a quota" ? "حِصّة" : "عدد أو مقدار محدود أو ثابت.",
+        },
+      });
+    }
+    throw new Error(`Unexpected external request in hard-limit test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("quota", { DB: database });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.data.meaning_ar, "حِصّة");
+    assert.equal(payload.data.definition_ar, "عدد أو مقدار محدود أو ثابت.");
+    assert.equal(googleCalls, 0);
+    assert.equal(fallbackCalls, 2);
+    assert.equal(database.state.charactersUsed, 449_995);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalGoogleKey === undefined) {
+      delete process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY;
+    } else {
+      process.env.GOOGLE_CLOUD_TRANSLATE_API_KEY = originalGoogleKey;
+    }
+  }
 });
 
 test("saves a dictionary word when only the optional Arabic definition translation fails", async () => {
