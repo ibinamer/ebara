@@ -637,6 +637,14 @@ body {
   box-shadow: 0 0 0 4px var(--ring);
 }
 
+.field-hint {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
 /*
  * A real macOS search field: a filled pill at rest, the same soft tint every
  * system search field uses, with a focus halo rather than a hard border —
@@ -869,6 +877,48 @@ body {
 
 .badge-accent {
   color: var(--accent-text);
+}
+
+/* A compact identity signature: personal and easy to spot, while keeping the
+   toolbar calm and free of account-dashboard furniture. */
+.account-signature {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(13rem, 42vw);
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 0.22rem 0.65rem 0.22rem 0.25rem;
+  box-shadow: var(--shadow-control);
+}
+
+:root[dir="rtl"] .account-signature {
+  padding: 0.22rem 0.25rem 0.22rem 0.65rem;
+}
+
+.account-avatar {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.account-display-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .segmented {
@@ -1178,6 +1228,30 @@ body {
 
 .settings-dialog {
   max-width: 30rem;
+}
+
+.account-settings-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-2);
+  padding: 1rem;
+}
+
+.account-email-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.account-email-row > :last-child {
+  color: var(--text-muted);
 }
 
 .confirm-dialog {

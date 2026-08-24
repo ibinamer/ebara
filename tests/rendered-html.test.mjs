@@ -110,6 +110,9 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
 
   assert.match(app, /signInWithPassword/);
   assert.match(app, /emailRedirectTo:\s*window\.location\.origin/);
+  assert.match(app, /data:\s*\{\s*display_name:\s*normalizedDisplayName\s*\}/);
+  assert.match(app, /auth\.updateUser\(\{[\s\S]*display_name:\s*normalized/);
+  assert.match(settings, /settings\.displayName/);
   assert.match(app, /resetPasswordForEmail/);
   assert.match(app, /acceptedTerms/);
   assert.match(app, /functions\.invoke\(["']delete-account["']/);
@@ -806,6 +809,6 @@ test("server-renders bilingual legal pages", async () => {
     const html = await response.text();
     assert.match(html, /EBARA/);
     assert.match(html, pathname === "/privacy" ? /Privacy notice/ : /Terms of use/);
-    assert.match(html, /Last updated: 19 August 2026/);
+    assert.match(html, /Last updated: 24 August 2026/);
   }
 });

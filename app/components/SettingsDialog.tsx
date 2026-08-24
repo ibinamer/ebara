@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Download, LoaderCircle, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Check, Download, LoaderCircle, Trash2 } from "lucide-react";
+import { FormEvent, useState } from "react";
 import { Dialog, DialogClose } from "./Dialog";
 import { useI18n, type Locale } from "@/lib/i18n";
 
@@ -14,16 +14,20 @@ const LOCALES: { value: Locale; label: string }[] = [
 export function SettingsDialog({
   onClose,
   accountEmail,
+  displayName,
   guestMode,
   demoMode,
+  onUpdateDisplayName,
   onExport,
   onClearGuest,
   onDeleteAccount,
 }: {
   onClose: () => void;
   accountEmail?: string;
+  displayName: string;
   guestMode: boolean;
   demoMode: boolean;
+  onUpdateDisplayName: (displayName: string) => Promise<void>;
   onExport: () => void;
   onClearGuest: () => void;
   onDeleteAccount: () => Promise<void>;
@@ -31,7 +35,26 @@ export function SettingsDialog({
   const { t, locale, setLocale } = useI18n();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [displayNameDraft, setDisplayNameDraft] = useState(displayName);
+  const [isSavingName, setIsSavingName] = useState(false);
+  const [nameSaved, setNameSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function saveDisplayName(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingName(true);
+    setNameSaved(false);
+    setError(null);
+    try {
+      await onUpdateDisplayName(displayNameDraft);
+      setDisplayNameDraft(displayNameDraft.trim().replace(/\s+/g, " "));
+      setNameSaved(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("settings.actionError"));
+    } finally {
+      setIsSavingName(false);
+    }
+  }
 
   async function deleteAccount() {
     setIsDeleting(true);
@@ -90,20 +113,67 @@ export function SettingsDialog({
         style={{ borderColor: "var(--border)" }}
       >
         <p className="detail-label">{t("settings.account")}</p>
-        <p className="type-body mt-3" style={{ color: "var(--text-muted)" }}>
-          {accountEmail ? (
-            <>
-              {t("settings.signedInAs")}{" "}
-              <span dir="ltr" className="bidi-isolate font-medium" style={{ color: "var(--text)" }}>
+        {accountEmail ? (
+          <div className="account-settings-card mt-3">
+            <form onSubmit={saveDisplayName}>
+              <label className="block">
+                <span className="field-label">{t("settings.displayName")}</span>
+                <input
+                  type="text"
+                  dir="auto"
+                  className="field-input"
+                  value={displayNameDraft}
+                  onChange={(event) => {
+                    setDisplayNameDraft(event.target.value);
+                    setNameSaved(false);
+                  }}
+                  placeholder={t("settings.displayNamePlaceholder")}
+                  autoComplete="name"
+                  minLength={2}
+                  maxLength={40}
+                  required
+                />
+              </label>
+              <p className="type-caption mt-2" style={{ color: "var(--text-faint)" }}>
+                {t("settings.displayNameHint")}
+              </p>
+              <button
+                type="submit"
+                className="secondary-button mt-3 w-full"
+                disabled={
+                  isSavingName ||
+                  displayNameDraft.trim().replace(/\s+/g, " ") === displayName
+                }
+              >
+                {isSavingName ? (
+                  <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+                ) : nameSaved ? (
+                  <Check size={15} aria-hidden="true" />
+                ) : null}
+                {nameSaved ? t("settings.displayNameSaved") : t("settings.saveDisplayName")}
+              </button>
+            </form>
+            <div className="account-email-row">
+              <span>{t("settings.email")}</span>
+              <span dir="ltr" className="bidi-isolate truncate font-medium" title={accountEmail}>
                 {accountEmail}
               </span>
-            </>
-          ) : guestMode ? (
-            t("settings.guestMode")
-          ) : demoMode ? (
-            t("settings.previewMode")
-          ) : null}
-        </p>
+            </div>
+          </div>
+        ) : (
+          <p className="type-body mt-3" style={{ color: "var(--text-muted)" }}>
+            {guestMode
+              ? t("settings.guestMode")
+              : demoMode
+                ? t("settings.previewMode")
+                : null}
+          </p>
+        )}
+        {error && !confirmDelete && (
+          <div className="notice error-notice mt-3" role="alert">
+            {error}
+          </div>
+        )}
       </section>
 
       {!demoMode && (

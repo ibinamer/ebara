@@ -62,6 +62,20 @@ const ProductDemo = lazy(() =>
 type AuthMode = "login" | "signup" | "forgot" | "update";
 type AddStep = "capture" | "review";
 const ARABIC_CHARACTER_PATTERN = /\p{Script=Arabic}/u;
+const DISPLAY_NAME_MAX_LENGTH = 40;
+
+function normalizeDisplayName(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function getDisplayName(session: Session | null) {
+  const value = session?.user.user_metadata?.display_name;
+  return typeof value === "string" ? normalizeDisplayName(value) : "";
+}
+
+function getDisplayInitial(displayName: string) {
+  return Array.from(displayName)[0]?.toLocaleUpperCase() ?? "";
+}
 
 type SpeechAlternative = { transcript: string; confidence: number };
 type SpeechResultEventLike = {
@@ -351,6 +365,8 @@ export default function Ebara({
     return sortWords(result, sortOrder);
   }, [searchQuery, sortOrder, words]);
 
+  const displayName = getDisplayName(session);
+
   async function handleLogout() {
     if (guestMode) {
       window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
@@ -371,6 +387,7 @@ export default function Ebara({
       service: "EBARA",
       exported_at: new Date().toISOString(),
       account_email: session?.user.email ?? null,
+      display_name: displayName || null,
       storage: guestMode ? "this device" : "Supabase account",
       words: words.map((entry) =>
         Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "user_id")),
@@ -410,6 +427,24 @@ export default function Ebara({
     setSelectedWord(null);
     setWordToDelete(null);
     setSettingsOpen(false);
+  }
+
+  async function handleUpdateDisplayName(nextDisplayName: string) {
+    if (!supabase || !session) throw new Error("A signed-in account is required.");
+
+    const normalized = normalizeDisplayName(nextDisplayName);
+    if (normalized.length < 2 || normalized.length > DISPLAY_NAME_MAX_LENGTH) {
+      throw new Error(t("settings.displayNameError"));
+    }
+
+    const { data, error } = await supabase.auth.updateUser({
+      data: { display_name: normalized },
+    });
+    if (error) throw error;
+
+    setSession((current) =>
+      current && data.user ? { ...current, user: data.user } : current,
+    );
   }
 
   function continueAsGuest() {
@@ -532,14 +567,20 @@ export default function Ebara({
             )}
           </div>
 
-          <div className="flex items-center gap-0.5">
-            <span
-              className="badge me-2 hidden not-italic sm:inline"
-              style={{ color: "var(--text-faint)" }}
-            >
-              {session?.user.email ??
-                (guestMode ? t("header.guestAccount") : t("header.previewAccount"))}
-            </span>
+          <div className="flex min-w-0 items-center gap-0.5">
+            <div className="account-signature me-1.5" aria-label={t("header.accountName")}>
+              <span className="account-avatar" aria-hidden="true">
+                {displayName
+                  ? getDisplayInitial(displayName)
+                  : guestMode
+                    ? t("header.guestInitial")
+                    : t("header.previewInitial")}
+              </span>
+              <span className="account-display-name">
+                {displayName ||
+                  (guestMode ? t("header.guestAccount") : t("header.previewAccount"))}
+              </span>
+            </div>
 
             <button
               type="button"
@@ -690,8 +731,10 @@ export default function Ebara({
         <SettingsDialog
           onClose={() => setSettingsOpen(false)}
           accountEmail={session?.user.email}
+          displayName={displayName}
           guestMode={guestMode}
           demoMode={demoMode}
+          onUpdateDisplayName={handleUpdateDisplayName}
           onExport={handleExportData}
           onClearGuest={handleClearGuest}
           onDeleteAccount={handleDeleteAccount}
@@ -785,6 +828,7 @@ function AuthScreen({
   onContinueGuest: () => void;
 }) {
   const { t } = useI18n();
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -821,11 +865,19 @@ function AuthScreen({
         if (signInError) throw signInError;
       } else if (mode === "signup") {
         if (!acceptedTerms) throw new Error(t("auth.errAcceptTerms"));
+        const normalizedDisplayName = normalizeDisplayName(displayName);
+        if (
+          normalizedDisplayName.length < 2 ||
+          normalizedDisplayName.length > DISPLAY_NAME_MAX_LENGTH
+        ) {
+          throw new Error(t("auth.errDisplayName"));
+        }
         const { error: signUpError } = await client.auth.signUp({
           email,
           password,
           options: {
             emailRedirectTo: window.location.origin,
+            data: { display_name: normalizedDisplayName },
           },
         });
         if (signUpError) throw signUpError;
@@ -916,6 +968,25 @@ function AuthScreen({
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
+              {mode === "signup" && (
+                <label className="block">
+                  <span className="field-label">{t("auth.displayName")}</span>
+                  <input
+                    type="text"
+                    dir="auto"
+                    className="field-input"
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    placeholder={t("auth.displayNamePlaceholder")}
+                    autoComplete="name"
+                    minLength={2}
+                    maxLength={DISPLAY_NAME_MAX_LENGTH}
+                    required
+                  />
+                  <span className="field-hint">{t("auth.displayNameHint")}</span>
+                </label>
+              )}
+
               {mode !== "update" && (
                 <label className="block">
                   <span className="field-label">{t("auth.email")}</span>

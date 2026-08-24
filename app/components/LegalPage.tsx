@@ -22,7 +22,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
   en: {
     title: "Privacy notice",
     summary: "What EBARA collects, why it is needed, and the choices you have.",
-    updated: "Last updated: 19 August 2026",
+    updated: "Last updated: 24 August 2026",
     sections: [
       {
         title: "Who controls your data",
@@ -33,7 +33,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "Data we process",
         items: [
-          "Account data: your email address, encrypted authentication credentials, account identifiers, and session information.",
+          "Account data: your display name, email address, encrypted authentication credentials, account identifiers, and session information.",
           "Vocabulary data: saved words, Arabic meanings, definitions, pronunciation and IPA, part of speech, examples, personal notes, and timestamps.",
           "Technical data needed for security and delivery, such as IP address, browser details, request logs, and rate-limit records.",
           "Guest data: words and language preference stored only in your browser until you clear them or create an account.",
@@ -92,7 +92,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
   ar: {
     title: "إشعار الخصوصية",
     summary: "وش نجمع في EBARA، وليش نحتاجه، والخيارات المتاحة لك.",
-    updated: "آخر تحديث: ١٩ أغسطس ٢٠٢٦",
+    updated: "آخر تحديث: ٢٤ أغسطس ٢٠٢٦",
     sections: [
       {
         title: "جهة التحكم ببياناتك",
@@ -103,7 +103,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "البيانات اللي نعالجها",
         items: [
-          "بيانات الحساب: بريدك الإلكتروني، بيانات الدخول المشفّرة، معرّفات الحساب، ومعلومات الجلسة.",
+          "بيانات الحساب: اسم العرض، بريدك الإلكتروني، بيانات الدخول المشفّرة، معرّفات الحساب، ومعلومات الجلسة.",
           "بيانات المكتبة: الكلمات المحفوظة، المعاني والتعريفات، النطق والـ IPA، نوع الكلمة، الأمثلة، ملاحظاتك، وتاريخ الإضافة.",
           "بيانات تقنية لازمة للحماية وتشغيل الخدمة، مثل عنوان IP ونوع المتصفح وسجلات الطلبات وحدود الاستخدام.",
           "بيانات الزائر: الكلمات واللغة المختارة محفوظة داخل متصفحك فقط إلى أن تمسحها أو تنشئ حساباً.",
@@ -165,7 +165,7 @@ const termsCopy: Record<"en" | "ar", LegalCopy> = {
   en: {
     title: "Terms of use",
     summary: "The simple rules for using your personal vocabulary library.",
-    updated: "Last updated: 19 August 2026",
+    updated: "Last updated: 24 August 2026",
     sections: [
       {
         title: "Using EBARA",
@@ -228,7 +228,7 @@ const termsCopy: Record<"en" | "ar", LegalCopy> = {
   ar: {
     title: "شروط الاستخدام",
     summary: "القواعد البسيطة لاستخدام مكتبتك الشخصية في EBARA.",
-    updated: "آخر تحديث: ١٩ أغسطس ٢٠٢٦",
+    updated: "آخر تحديث: ٢٤ أغسطس ٢٠٢٦",
     sections: [
       {
         title: "موافقتك على الشروط",
