@@ -401,6 +401,12 @@ export async function POST(request: Request): Promise<Response> {
           partOfSpeechRanking,
         )
       : null;
+  const wiktionaryMarksMisspelling = Boolean(
+    input.wordCount === 1 &&
+      mainWikitext.ok &&
+      mainWikitext.data &&
+      isWiktionaryMisspellingPage(mainWikitext.data),
+  );
 
   let englishData: EnglishDictionaryData;
   if (english.ok) {
@@ -426,9 +432,19 @@ export async function POST(request: Request): Promise<Response> {
       }
 
       const suggestions =
-        english.code === "DICTIONARY_NOT_FOUND"
+        english.code === "DICTIONARY_NOT_FOUND" || wiktionaryMarksMisspelling
           ? await fetchSpellingSuggestions(input.dictionaryTerm)
           : [];
+      if (wiktionaryMarksMisspelling) {
+        return errorResponse(
+          "DICTIONARY_NOT_FOUND",
+          "No dictionary entry was found for this spelling.",
+          404,
+          rate,
+          undefined,
+          { suggestions },
+        );
+      }
       return lookupErrorResponse(english, rate, suggestions);
     }
     englishData = fromWiktionary;
@@ -1886,6 +1902,15 @@ function isMeaningfulDefinition(value: string | null): value is string {
 
 function isMisspellingDefinition(value: string): boolean {
   return /^(?:a\s+)?(?:common\s+)?misspelling\s+of\b/iu.test(value.trim());
+}
+
+function isWiktionaryMisspellingPage(wikitext: string): boolean {
+  const english = extractEnglishSection(wikitext);
+  if (!english) return false;
+  return (
+    /\{\{(?:common\s+)?misspelling[ _-]of(?=\||\})/iu.test(english) ||
+    /^#\s*(?:a\s+)?(?:common\s+)?misspelling\s+of\b/imu.test(english)
+  );
 }
 
 function extractEnglishSection(wikitext: string): string | null {

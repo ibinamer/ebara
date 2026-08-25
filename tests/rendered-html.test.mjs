@@ -1173,7 +1173,7 @@ test("offers spelling suggestions for a missing single word instead of translati
           : input.url,
     );
     if (url.hostname === "api.dictionaryapi.dev") {
-      return Response.json({ title: "No Definitions Found" }, { status: 404 });
+      return Response.json({ title: "Service unavailable" }, { status: 503 });
     }
     if (url.hostname === "en.wiktionary.org") {
       if (url.searchParams.get("action") === "expandtemplates") {
