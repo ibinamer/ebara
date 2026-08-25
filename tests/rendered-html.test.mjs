@@ -939,6 +939,14 @@ test("expands template-only Wiktionary definitions for ordinary phrases", async 
         expected: /used other than figuratively/i,
       },
     ],
+    [
+      "break a leg",
+      {
+        raw: "{{non-gloss|!; Do your best!;}}",
+        expanded: "!; Do your best!;",
+        expected: /^Do your best!$/,
+      },
+    ],
   ]);
 
   delete process.env.AZURE_TRANSLATOR_KEY;
@@ -1168,7 +1176,22 @@ test("offers spelling suggestions for a missing single word instead of translati
       return Response.json({ title: "No Definitions Found" }, { status: 404 });
     }
     if (url.hostname === "en.wiktionary.org") {
-      return Response.json({ error: { code: "missingtitle" } });
+      if (url.searchParams.get("action") === "expandtemplates") {
+        return Response.json({
+          expandtemplates: {
+            wikitext: "Misspelling of [[perseverance]].",
+          },
+        });
+      }
+      return Response.json({
+        parse: {
+          wikitext: [
+            "==English==",
+            "===Noun===",
+            "# {{misspelling of|en|perseverance}}",
+          ].join("\n"),
+        },
+      });
     }
     if (url.hostname === "api.datamuse.com") {
       return url.searchParams.get("max") === "5"

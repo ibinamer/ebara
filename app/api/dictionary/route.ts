@@ -1828,6 +1828,10 @@ async function parseWiktionaryDefinition(
       }
 
       if (!isMeaningfulDefinition(definition)) continue;
+      // A typo page is metadata about an invalid spelling, not a vocabulary
+      // sense. Ignoring it lets the normal one-word miss path return useful
+      // spelling suggestions instead of translating "Misspelling of …".
+      if (isMisspellingDefinition(definition)) continue;
 
       const definitionTokens = significantEnglishTokens(definition);
       const matchingTranslation = translationBoxes
@@ -1876,6 +1880,10 @@ async function parseWiktionaryDefinition(
 
 function isMeaningfulDefinition(value: string | null): value is string {
   return Boolean(value && /[\p{L}\p{N}]/u.test(value));
+}
+
+function isMisspellingDefinition(value: string): boolean {
+  return /^(?:a\s+)?(?:common\s+)?misspelling\s+of\b/iu.test(value.trim());
 }
 
 function extractEnglishSection(wikitext: string): string | null {
@@ -1987,6 +1995,11 @@ function cleanWikitextText(value: string, maxLength: number): string | null {
     .replace(/'{2,}/gu, "")
     .replace(/\s+/gu, " ")
     .normalize("NFC")
+    .trim()
+    // Some expanded Wiktionary templates leave wiki list punctuation around
+    // otherwise clean prose (for example "!; Do your best!;").
+    .replace(/^[!;,:.]+\s*/u, "")
+    .replace(/;+\s*$/u, "")
     .trim();
 
   return cleaned && cleaned.length <= maxLength ? cleaned : null;
