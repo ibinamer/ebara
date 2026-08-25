@@ -356,15 +356,14 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // A bare phrase is often ambiguous to machine translation. Translating the
-  // selected dictionary definition preserves the intended idiomatic sense;
-  // single words still use the shorter headword context.
-  const meaningLookupText = isMultiWordTerm(englishData.word)
-    ? englishData.definition_en
-    : translationHeadwordContext(
-        englishData.word,
-        englishData.part_of_speech,
-      );
+  // Keep meaning_ar as a short lookup gloss. Phrases are translated as the
+  // phrase itself; their selected, sense-aware dictionary definition is
+  // translated separately into definition_ar below. This prevents a complete
+  // explanatory sentence from leaking into the compact meaning field.
+  const meaningLookupText = translationHeadwordContext(
+    englishData.word,
+    englishData.part_of_speech,
+  );
   const shortMeaningPromise = meaningAr
     ? Promise.resolve<LookupDecision<string>>({ ok: true, data: meaningAr })
     : translateToArabic(meaningLookupText);
@@ -718,7 +717,9 @@ function sharedDictionaryCache(): SharedDictionaryCache | null {
 function sharedDictionaryCacheKey(request: Request, word: string): Request | null {
   try {
     const url = new URL(request.url);
-    url.pathname = `/__ebara-cache/dictionary/${encodeURIComponent(word)}`;
+    // Version the shared cache whenever provider selection or meaning quality
+    // changes so older fallback translations cannot survive for 30 days.
+    url.pathname = `/__ebara-cache/v2/dictionary/${encodeURIComponent(word)}`;
     url.search = "";
     url.hash = "";
     return new Request(url, { method: "GET" });

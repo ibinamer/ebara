@@ -196,6 +196,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(app, /apiCode === "DICTIONARY_NOT_FOUND"/);
   assert.match(route, /action", "expandtemplates"/);
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
+  assert.match(route, /\/__ebara-cache\/v2\/dictionary\//);
   assert.match(route, /normalizeDictionaryAudioUrl/);
   assert.match(route, /audio_url/);
   assert.doesNotMatch(route, /translation\.googleapis\.com/);
@@ -981,6 +982,96 @@ test("expands template-only Wiktionary definitions for ordinary phrases", async 
       assert.match(payload.data.definition_en, expectation.expected);
     }
     assert.deepEqual(expandedPages.sort(), [...phraseDefinitions.keys()].sort());
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
+    } else {
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
+    }
+  }
+});
+
+test("keeps an Azure phrase meaning short and translates its definition separately", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
+  const azureInputs = [];
+
+  process.env.AZURE_TRANSLATOR_KEY = "test-server-only-key";
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json({ title: "No Definitions Found" }, { status: 404 });
+    }
+    if (url.hostname === "api.datamuse.com") {
+      return Response.json([{ tags: ["n"] }]);
+    }
+    if (url.hostname === "en.wiktionary.org") {
+      const action = url.searchParams.get("action");
+      const page = url.searchParams.get("page") ?? url.searchParams.get("title") ?? "";
+      if (action === "expandtemplates") {
+        return Response.json({
+          expandtemplates: {
+            wikitext:
+              "A term of endearment, usually addressed toward an all-around good male person.",
+          },
+        });
+      }
+      if (page.endsWith("/translations")) {
+        return Response.json({ error: { code: "missingtitle" } });
+      }
+      return Response.json({
+        parse: {
+          wikitext:
+            "==English==\n===Noun===\n# {{non-gloss|A term of endearment, usually addressed toward an all-around good male person.}}",
+        },
+      });
+    }
+    if (url.hostname === "api.cognitive.microsofttranslator.com") {
+      const text = JSON.parse(String(init?.body))[0].Text;
+      azureInputs.push(text);
+      if (url.pathname === "/dictionary/lookup") {
+        return Response.json([{ normalizedSource: "big guy", translations: [] }]);
+      }
+      if (url.pathname === "/translate") {
+        return Response.json([
+          {
+            translations: [
+              {
+                text:
+                  text === "big guy"
+                    ? "الرجل الكبير"
+                    : "مصطلح محبة يوجّه عادةً إلى رجل طيب.",
+                to: "ar",
+              },
+            ],
+          },
+        ]);
+      }
+    }
+    throw new Error(`Unexpected external request in Azure phrase test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("big guy", {
+      DB: createUsageDatabase(),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.data.meaning_ar, "الرجل الكبير");
+    assert.equal(payload.data.definition_ar, "مصطلح محبة يوجّه عادةً إلى رجل طيب.");
+    assert.deepEqual(azureInputs, [
+      "big guy",
+      "big guy",
+      "A term of endearment, usually addressed toward an all-around good male person.",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalAzureKey === undefined) {
