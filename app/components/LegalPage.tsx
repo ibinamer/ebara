@@ -54,7 +54,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "Service providers and international processing",
         paragraphs: [
-          "Supabase provides authentication and database hosting. The current EBARA database region is Tokyo, Japan, so account and vocabulary data may be processed outside Saudi Arabia. Dictionary lookups may send the word or definition and ordinary request metadata to Free Dictionary API, Wikimedia/Wiktionary, Google translation services, or MyMemory. We do not send your email address or your complete library to dictionary providers.",
+          "Supabase provides authentication and database hosting. The current EBARA database region is Tokyo, Japan, so account and vocabulary data may be processed outside Saudi Arabia. Dictionary lookups may send the word or definition and ordinary request metadata to Free Dictionary API, Wikimedia/Wiktionary, Microsoft Azure Translator, or MyMemory. We do not send your email address or your complete library to dictionary providers.",
           "Each provider applies its own terms and privacy notice. EBARA does not sell personal data and does not use your vocabulary for targeted advertising.",
         ],
       },
@@ -124,7 +124,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "مقدمو الخدمة والمعالجة خارج المملكة",
         paragraphs: [
-          "توفّر Supabase تسجيل الدخول وقاعدة البيانات. منطقة قاعدة بيانات EBARA الحالية في طوكيو باليابان، لذلك قد تُعالج بيانات الحساب والمكتبة خارج المملكة العربية السعودية. وقد ترسل عمليات البحث الكلمة أو التعريف وبيانات الطلب المعتادة إلى Free Dictionary API أو Wikimedia/Wiktionary أو خدمات ترجمة Google أو MyMemory. ما نرسل بريدك ولا مكتبتك كاملة لمزوّدي القواميس.",
+          "توفّر Supabase تسجيل الدخول وقاعدة البيانات. منطقة قاعدة بيانات EBARA الحالية في طوكيو باليابان، لذلك قد تُعالج بيانات الحساب والمكتبة خارج المملكة العربية السعودية. وقد ترسل عمليات البحث الكلمة أو التعريف وبيانات الطلب المعتادة إلى Free Dictionary API أو Wikimedia/Wiktionary أو Microsoft Azure Translator أو MyMemory. ما نرسل بريدك ولا مكتبتك كاملة لمزوّدي القواميس.",
           "كل مزوّد يطبّق شروطه وسياسة خصوصيته. EBARA ما تبيع بياناتك الشخصية ولا تستخدم كلماتك للإعلانات الموجّهة.",
         ],
       },
