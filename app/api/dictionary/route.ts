@@ -833,7 +833,7 @@ function sharedDictionaryCacheKey(request: Request, word: string): Request | nul
     const url = new URL(request.url);
     // Version the shared cache whenever provider selection or meaning quality
     // changes so older fallback translations cannot survive for 30 days.
-    url.pathname = `/__ebara-cache/v2/dictionary/${encodeURIComponent(word)}`;
+    url.pathname = `/__ebara-cache/v3/dictionary/${encodeURIComponent(word)}`;
     url.search = "";
     url.hash = "";
     return new Request(url, { method: "GET" });
@@ -1045,6 +1045,8 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
   ) {
     return null;
   }
+
+  if (!translationOnly && isMisspellingDefinition(definition)) return null;
 
   return {
     word,

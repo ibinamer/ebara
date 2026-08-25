@@ -204,7 +204,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(app, /apiCode === "DICTIONARY_NOT_FOUND"/);
   assert.match(route, /action", "expandtemplates"/);
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
-  assert.match(route, /\/__ebara-cache\/v2\/dictionary\//);
+  assert.match(route, /\/__ebara-cache\/v3\/dictionary\//);
   assert.match(route, /normalizeDictionaryAudioUrl/);
   assert.match(route, /audio_url/);
   assert.doesNotMatch(route, /translation\.googleapis\.com/);
