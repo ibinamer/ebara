@@ -52,6 +52,33 @@ async function callDictionary(word, bindings = {}) {
   );
 }
 
+async function callSpeech(audio, bindings = {}) {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("speech-test", `${process.pid}-${Date.now()}-${audio.byteLength}`);
+  const { default: worker } = await import(workerUrl.href);
+
+  return worker.fetch(
+    new Request("http://localhost/api/speech", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+      },
+      body: audio,
+    }),
+    {
+      ASSETS: {
+        fetch: async () => new Response("Not found", { status: 404 }),
+      },
+      ...bindings,
+    },
+    {
+      waitUntil() {},
+      passThroughOnException() {},
+    },
+  );
+}
+
 function createUsageDatabase(initialCharacters = 0) {
   const state = {
     charactersUsed: initialCharacters,
@@ -90,6 +117,70 @@ function createUsageDatabase(initialCharacters = 0) {
   };
 }
 
+function createSpeechUsageDatabase(initialMilliseconds = 0) {
+  const state = {
+    millisecondsUsed: initialMilliseconds,
+    warningEmitted: initialMilliseconds >= 14_400_000,
+  };
+
+  return {
+    state,
+    prepare(query) {
+      let values = [];
+      return {
+        bind(...nextValues) {
+          values = nextValues;
+          return this;
+        },
+        async run() {
+          assert.match(query, /CREATE TABLE IF NOT EXISTS azure_speech_usage/);
+          return { success: true };
+        },
+        async first() {
+          if (/INSERT INTO azure_speech_usage/.test(query)) {
+            const milliseconds = Number(values[1]);
+            if (state.millisecondsUsed + milliseconds > 16_200_000) return null;
+            state.millisecondsUsed += milliseconds;
+            return { milliseconds_used: state.millisecondsUsed };
+          }
+          if (/UPDATE azure_speech_usage/.test(query)) {
+            if (state.millisecondsUsed < 14_400_000 || state.warningEmitted) return null;
+            state.warningEmitted = true;
+            return { milliseconds_used: state.millisecondsUsed };
+          }
+          throw new Error(`Unexpected speech D1 statement: ${query}`);
+        },
+      };
+    },
+  };
+}
+
+function createPcmWav(durationMilliseconds = 1_000) {
+  const sampleRate = 16_000;
+  const sampleCount = Math.round((sampleRate * durationMilliseconds) / 1_000);
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  const writeAscii = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "data");
+  view.setUint32(40, sampleCount * 2, true);
+  return buffer;
+}
+
 test("server-renders the EBARA preview or configured auth bootstrap", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -119,9 +210,13 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     audioMigration,
     translationOnlyMigration,
     speech,
+    voiceInput,
+    speechRoute,
     usageMeter,
+    speechUsageMeter,
     usageSchema,
     usageMigration,
+    speechUsageMigration,
     hostingConfig,
     envExample,
     readme,
@@ -153,9 +248,13 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
       "utf8",
     ),
     readFile(new URL("../lib/speech.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/use-voice-input.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/speech/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../db/azure-translation-usage.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/azure-speech-usage.ts", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0001_azure_translation_usage.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0002_azure_speech_usage.sql", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
@@ -176,7 +275,16 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(settings, /settings\.export/);
   assert.match(deleteAccount, /auth\.admin\.deleteUser\(user\.id\)/);
   assert.match(deleteAccount, /DELETE_MY_ACCOUNT/);
-  assert.match(app, /webkitSpeechRecognition/);
+  assert.match(voiceInput, /webkitSpeechRecognition/);
+  assert.match(voiceInput, /MediaRecorder/);
+  assert.match(voiceInput, /NATIVE_WATCHDOG_MS/);
+  assert.match(voiceInput, /service-not-allowed/);
+  assert.match(voiceInput, /navigator\.mediaDevices\.getUserMedia/);
+  assert.match(speechRoute, /AZURE_SPEECH_KEY/);
+  assert.match(speechRoute, /AZURE_SPEECH_REGION/);
+  assert.match(speechRoute, /format", "detailed"/);
+  assert.match(speechRoute, /MAX_BODY_BYTES = 350_000/);
+  assert.doesNotMatch(voiceInput, /AZURE_SPEECH_KEY/);
   assert.match(app, /meaning_ar\.includes\(query\)/);
   assert.match(app, /fetch\(["']\/api\/dictionary["']/);
   assert.match(route, /https:\/\/api\.dictionaryapi\.dev\/api\/v2\/entries\/en\//);
@@ -192,8 +300,13 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(usageMeter, /Array\.from\(text\)\.length/);
   assert.match(usageMeter, /ON CONFLICT\(month_key\) DO UPDATE/);
   assert.match(usageMeter, /reason: "meter-unavailable"/);
+  assert.match(speechUsageMeter, /AZURE_SPEECH_WARNING_MILLISECONDS = 14_400_000/);
+  assert.match(speechUsageMeter, /AZURE_SPEECH_HARD_LIMIT_MILLISECONDS = 16_200_000/);
+  assert.match(speechUsageMeter, /reason: "meter-unavailable"/);
   assert.match(usageSchema, /CREATE TABLE IF NOT EXISTS azure_translation_usage/);
+  assert.match(usageSchema, /CREATE TABLE IF NOT EXISTS azure_speech_usage/);
   assert.match(usageMigration, /characters_used[^]*1900000/);
+  assert.match(speechUsageMigration, /milliseconds_used[^]*16200000/);
   assert.match(hostingConfig, /"d1": "DB"/);
   assert.match(
     route,
@@ -334,7 +447,10 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   );
   assert.match(envExample, /^AZURE_TRANSLATOR_KEY=/m);
   assert.match(envExample, /^AZURE_TRANSLATOR_REGION=/m);
+  assert.match(envExample, /^AZURE_SPEECH_KEY=/m);
+  assert.match(envExample, /^AZURE_SPEECH_REGION=/m);
   assert.doesNotMatch(envExample, /^NEXT_PUBLIC_AZURE_TRANSLATOR_KEY=/m);
+  assert.doesNotMatch(envExample, /^NEXT_PUBLIC_AZURE_SPEECH_KEY=/m);
   assert.doesNotMatch(wordsTable, /^  (?:level|example1|example2)\s/gim);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 
@@ -355,6 +471,90 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     ),
   );
   await access(projectRoot);
+});
+
+test("transcribes a short PCM recording through the protected Azure Speech route", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.AZURE_SPEECH_KEY;
+  const originalRegion = process.env.AZURE_SPEECH_REGION;
+  const database = createSpeechUsageDatabase();
+  const audio = createPcmWav(1_000);
+  let azureCalls = 0;
+
+  process.env.AZURE_SPEECH_KEY = "test-server-only-speech-key";
+  process.env.AZURE_SPEECH_REGION = "qatarcentral";
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+    if (url.hostname !== "qatarcentral.stt.speech.microsoft.com") {
+      throw new Error(`Unexpected speech request: ${url}`);
+    }
+    azureCalls += 1;
+    assert.equal(url.searchParams.get("language"), "en-US");
+    assert.equal(url.searchParams.get("format"), "detailed");
+    assert.equal(init?.headers["Ocp-Apim-Subscription-Key"], "test-server-only-speech-key");
+    assert.match(String(init?.headers["Content-Type"]), /audio\/wav/);
+    return Response.json({
+      RecognitionStatus: "Success",
+      NBest: [
+        { Display: "Perseverance.", Confidence: 0.94 },
+        { Display: "Perseverances.", Confidence: 0.52 },
+      ],
+    });
+  };
+
+  try {
+    const response = await callSpeech(audio, { DB: database });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.deepEqual(payload.alternatives, [
+      { transcript: "Perseverance.", confidence: 0.94 },
+      { transcript: "Perseverances.", confidence: 0.52 },
+    ]);
+    assert.equal(azureCalls, 1);
+    assert.equal(database.state.millisecondsUsed, 1_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.AZURE_SPEECH_KEY;
+    else process.env.AZURE_SPEECH_KEY = originalKey;
+    if (originalRegion === undefined) delete process.env.AZURE_SPEECH_REGION;
+    else process.env.AZURE_SPEECH_REGION = originalRegion;
+  }
+});
+
+test("stops the cloud microphone fallback before the monthly speech ceiling", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.AZURE_SPEECH_KEY;
+  const originalRegion = process.env.AZURE_SPEECH_REGION;
+  const database = createSpeechUsageDatabase(16_199_500);
+  let azureCalls = 0;
+
+  process.env.AZURE_SPEECH_KEY = "test-server-only-speech-key";
+  process.env.AZURE_SPEECH_REGION = "qatarcentral";
+  globalThis.fetch = async () => {
+    azureCalls += 1;
+    return Response.json({ RecognitionStatus: "Success", DisplayText: "word" });
+  };
+
+  try {
+    const response = await callSpeech(createPcmWav(1_000), { DB: database });
+    const payload = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(payload.error.code, "SPEECH_USAGE_LIMIT");
+    assert.equal(azureCalls, 0);
+    assert.equal(database.state.millisecondsUsed, 16_199_500);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.AZURE_SPEECH_KEY;
+    else process.env.AZURE_SPEECH_KEY = originalKey;
+    if (originalRegion === undefined) delete process.env.AZURE_SPEECH_REGION;
+    else process.env.AZURE_SPEECH_REGION = originalRegion;
+  }
 });
 
 test("selects Azure dictionary meanings by part of speech and meters every attempt", async () => {

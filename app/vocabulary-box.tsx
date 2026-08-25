@@ -39,7 +39,7 @@ import { WordRow } from "./components/WordRow";
 import { WordDetailsDialog } from "./components/WordDetailsDialog";
 import { WordFacts, WordHeadline } from "./components/WordFacts";
 import { StatsSkeleton, WordGridSkeleton } from "./components/Skeletons";
-import { useI18n, type Translate } from "@/lib/i18n";
+import { useI18n, type Translate, type TranslationKey } from "@/lib/i18n";
 import {
   capitalize,
   normalizeCandidate,
@@ -48,6 +48,11 @@ import {
   vocabularyInputKey,
 } from "@/lib/speech";
 import { createVocabularyClient } from "@/lib/supabase";
+import {
+  useVoiceInput,
+  type VoiceAlternative,
+  type VoiceInputErrorCode,
+} from "@/lib/use-voice-input";
 import {
   calculateStats,
   sortWords,
@@ -83,28 +88,17 @@ function getDisplayInitial(displayName: string) {
   return Array.from(displayName)[0]?.toLocaleUpperCase() ?? "";
 }
 
-type SpeechAlternative = { transcript: string; confidence: number };
-type SpeechResultEventLike = {
-  results: ArrayLike<
-    ArrayLike<{ transcript: string; confidence: number }> & { isFinal: boolean }
-  >;
-};
-type SpeechErrorEventLike = { error: string };
-type BrowserSpeechRecognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  maxAlternatives: number;
-  onstart: (() => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: SpeechErrorEventLike) => void) | null;
-  onresult: ((event: SpeechResultEventLike) => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-type SpeechRecognitionWindow = Window & {
-  SpeechRecognition?: new () => BrowserSpeechRecognition;
-  webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+const VOICE_ERROR_KEYS: Record<VoiceInputErrorCode, TranslationKey> = {
+  unsupported: "add.errVoiceUnsupported",
+  blocked: "add.errMicBlocked",
+  "no-microphone": "add.errVoiceNoMicrophone",
+  "no-speech": "add.errVoiceNoSpeech",
+  unclear: "add.errVoiceUnclear",
+  network: "add.errVoiceNetwork",
+  "service-unavailable": "add.errVoiceService",
+  "language-unsupported": "add.errVoiceLanguage",
+  "rate-limited": "add.errVoiceRateLimited",
+  "start-failed": "add.errVoiceStart",
 };
 
 const DEMO_WORDS: WordRecord[] = [
@@ -1174,29 +1168,41 @@ function AddWordDialog({
   const { t } = useI18n();
   const [step, setStep] = useState<AddStep>("capture");
   const [draft, setDraft] = useState("");
-  const [voiceAlternatives, setVoiceAlternatives] = useState<SpeechAlternative[]>([]);
+  const [voiceAlternatives, setVoiceAlternatives] = useState<VoiceAlternative[]>([]);
   const [vocabularySuggestions, setVocabularySuggestions] = useState<string[]>([]);
   const [dictionaryEntry, setDictionaryEntry] = useState<DictionaryEntry | null>(null);
-  const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
-  const listeningTimeoutRef = useRef<number | null>(null);
+
+  const handleVoiceAlternatives = useCallback((alternatives: VoiceAlternative[]) => {
+    setError(null);
+    setVoiceAlternatives(alternatives);
+    if (alternatives[0]) setDraft(alternatives[0].transcript);
+  }, []);
+
+  const handleVoiceError = useCallback(
+    (code: VoiceInputErrorCode) => setError(t(VOICE_ERROR_KEYS[code])),
+    [t],
+  );
+
+  const {
+    status: voiceStatus,
+    start: startListening,
+    stop: stopListening,
+    cancel: cancelListening,
+  } = useVoiceInput({
+    accessToken: session?.access_token,
+    onAlternatives: handleVoiceAlternatives,
+    onError: handleVoiceError,
+  });
+  const isListening = voiceStatus === "listening";
+  const isVoiceBusy = voiceStatus !== "idle";
 
   useEffect(() => {
     const timeout = window.setTimeout(() => inputRef.current?.focus(), 80);
     return () => window.clearTimeout(timeout);
-  }, []);
-
-  // Always release the microphone and pending timer when the dialog goes away.
-  useEffect(() => {
-    return () => {
-      recognitionRef.current?.stop();
-      recognitionRef.current = null;
-      if (listeningTimeoutRef.current) window.clearTimeout(listeningTimeoutRef.current);
-    };
   }, []);
 
   async function lookupWord(
@@ -1287,59 +1293,6 @@ function AddWordDialog({
     }
   }
 
-  function startListening() {
-    setError(null);
-    const browserWindow = window as SpeechRecognitionWindow;
-    const SpeechRecognitionAPI =
-      browserWindow.SpeechRecognition ?? browserWindow.webkitSpeechRecognition;
-
-    if (!SpeechRecognitionAPI) {
-      setError(t("add.errVoiceUnsupported"));
-      return;
-    }
-
-    const recognition = new SpeechRecognitionAPI();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.maxAlternatives = 5;
-    recognition.onstart = () => {
-      setIsListening(true);
-      listeningTimeoutRef.current = window.setTimeout(() => recognition.stop(), 9_000);
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-      if (listeningTimeoutRef.current) window.clearTimeout(listeningTimeoutRef.current);
-      listeningTimeoutRef.current = null;
-    };
-    recognition.onerror = (event) => {
-      setIsListening(false);
-      setError(
-        event.error === "not-allowed" ? t("add.errMicBlocked") : t("add.errVoiceUnclear"),
-      );
-    };
-    recognition.onresult = (event) => {
-      const finalResult = event.results[event.results.length - 1];
-      const alternatives = Array.from({ length: finalResult.length }, (_, index) => {
-        const item = finalResult[index];
-        return {
-          transcript: normalizeVocabularyInput(item.transcript),
-          confidence: item.confidence,
-        };
-      }).filter((item) => item.transcript);
-
-      const unique = alternatives.filter(
-        (item, index, array) =>
-          array.findIndex((candidate) => candidate.transcript === item.transcript) === index,
-      );
-      setVoiceAlternatives(unique);
-      if (unique[0]) setDraft(unique[0].transcript);
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-  }
-
   async function saveWord() {
     if (!dictionaryEntry) return;
     const meaning = dictionaryEntry.meaning_ar.trim();
@@ -1422,9 +1375,15 @@ function AddWordDialog({
             />
             <button
               type="button"
-              onClick={isListening ? () => recognitionRef.current?.stop() : startListening}
+              onClick={() => {
+                setError(null);
+                if (voiceStatus === "idle") void startListening();
+                else if (voiceStatus === "listening") stopListening();
+                else cancelListening();
+              }}
               className="voice-button"
-              aria-label={isListening ? t("add.stopVoice") : t("add.voice")}
+              aria-label={isVoiceBusy ? t("add.stopVoice") : t("add.voice")}
+              disabled={voiceStatus === "processing"}
             >
               {isListening ? (
                 <span className="voice-pulse" aria-hidden="true" />
@@ -1434,7 +1393,7 @@ function AddWordDialog({
             </button>
           </div>
 
-          {isListening && (
+          {isVoiceBusy && (
             <div
               className="mt-3 flex items-center gap-2 text-sm"
               style={{ color: "var(--accent-text)" }}
@@ -1444,7 +1403,11 @@ function AddWordDialog({
                 className="size-1.5 animate-pulse rounded-full"
                 style={{ background: "currentColor" }}
               />
-              {t("add.listening")}
+              {voiceStatus === "requesting"
+                ? t("add.requestingMic")
+                : voiceStatus === "processing"
+                  ? t("add.processingVoice")
+                  : t("add.listening")}
             </div>
           )}
 
@@ -1479,7 +1442,7 @@ function AddWordDialog({
               type="button"
               onClick={() => void lookupWord(draft)}
               className="primary-button min-w-36"
-              disabled={!draft.trim() || isProcessing || isListening}
+              disabled={!draft.trim() || isProcessing || isVoiceBusy}
             >
               {isProcessing ? (
                 <LoaderCircle size={17} className="animate-spin" aria-hidden="true" />

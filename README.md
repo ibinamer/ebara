@@ -86,6 +86,8 @@ key is never placed in this repository or exposed to the browser.
 | `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | Public launch | Monitored address for privacy and support requests |
 | `AZURE_TRANSLATOR_KEY` | Optional | Server-only Azure Translator key; never exposed to the browser |
 | `AZURE_TRANSLATOR_REGION` | Optional | Azure resource region; required for regional or multi-service resources |
+| `AZURE_SPEECH_KEY` | Optional | Server-only Azure Speech key for the microphone fallback |
+| `AZURE_SPEECH_REGION` | Optional | Region of the Azure Speech resource, e.g. `qatarcentral` |
 
 `SUPABASE_URL` and `SUPABASE_ANON_KEY` are accepted as fallbacks for hosts that
 do not forward `NEXT_PUBLIC_` variables.
@@ -303,8 +305,13 @@ Arabic meaning still save instead of failing the entire lookup.
 
 Voice capture uses the browser's speech-recognition support to turn a short
 utterance into English text. Availability and suggested spellings depend on the
-browser and operating system. EBARA does not write voice recordings to
-Supabase; only the selected word and its completed dictionary record are stored.
+browser and operating system. When `AZURE_SPEECH_KEY` is configured, Safari,
+browsers without Web Speech support, and recoverable browser-service failures
+use Azure Speech as a short-lived fallback. Audio is limited to ten seconds,
+processed transiently, and never written to Supabase or application logs. Sites
+D1 stores only the number of milliseconds reserved each UTC month and stops the
+fallback at 4.5 hours, below Azure Speech F0's five-hour allowance. Only the
+recognized text continues into the existing dictionary flow.
 
 ## Preview mode
 

@@ -48,13 +48,13 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "Voice input",
         paragraphs: [
-          "Voice input uses speech-recognition features provided by your browser or device. EBARA receives the recognized text, not a stored recording, and never saves voice audio in its database. Your browser or operating-system provider may process the audio under its own privacy terms.",
+          "Voice input first uses speech-recognition features provided by your browser or device. When that path is unavailable and the optional fallback is configured, a recording of no more than ten seconds may be processed transiently by Microsoft Azure Speech. EBARA never saves voice audio in Supabase or application logs; only the recognized text continues into the dictionary flow. The browser, operating-system provider, or Microsoft may process the audio under its applicable privacy terms.",
         ],
       },
       {
         title: "Service providers and international processing",
         paragraphs: [
-          "Supabase provides authentication and database hosting. The current EBARA database region is Tokyo, Japan, so account and vocabulary data may be processed outside Saudi Arabia. A lookup may send the word, expression, short sentence, or definition and ordinary request metadata to Free Dictionary API, Wikimedia/Wiktionary, Microsoft Azure Translator, Datamuse, or MyMemory as needed. We do not send your email address or your complete library to these providers.",
+          "Supabase provides authentication and database hosting. The current EBARA database region is Tokyo, Japan, so account and vocabulary data may be processed outside Saudi Arabia. A lookup may send the word, expression, short sentence, or definition and ordinary request metadata to Free Dictionary API, Wikimedia/Wiktionary, Microsoft Azure Translator, Datamuse, or MyMemory as needed. The optional microphone fallback sends only the current short audio clip to Microsoft Azure Speech. We do not send your email address or your complete library to these providers.",
           "Each provider applies its own terms and privacy notice. EBARA does not sell personal data and does not use your vocabulary for targeted advertising.",
         ],
       },
@@ -118,13 +118,13 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "الإدخال الصوتي",
         paragraphs: [
-          "الإدخال الصوتي يعتمد على ميزة التعرّف على الكلام في متصفحك أو جهازك. تستقبل EBARA النص الناتج فقط، ولا تحفظ التسجيل الصوتي في قاعدة البيانات. قد يعالج مزوّد المتصفح أو نظام التشغيل الصوت بحسب سياسة الخصوصية الخاصة به.",
+          "الإدخال الصوتي يستخدم أولاً ميزة التعرّف على الكلام في متصفحك أو جهازك. إذا لم تتوفر وكان المسار الاحتياطي مفعّلاً، قد تعالج Microsoft Azure Speech تسجيلاً لا يتجاوز عشر ثوانٍ بشكل مؤقت. لا تحفظ EBARA الصوت في Supabase أو سجلات التطبيق؛ النص الناتج فقط يكمل إلى مسار القاموس. قد يعالج مزوّد المتصفح أو نظام التشغيل أو Microsoft الصوت وفق سياسة الخصوصية المطبقة لديه.",
         ],
       },
       {
         title: "مقدمو الخدمة والمعالجة خارج المملكة",
         paragraphs: [
-          "توفّر Supabase تسجيل الدخول وقاعدة البيانات. منطقة قاعدة بيانات EBARA الحالية في طوكيو باليابان، لذلك قد تُعالج بيانات الحساب والمكتبة خارج المملكة العربية السعودية. وقد ترسل عملية البحث الكلمة أو العبارة أو الجملة القصيرة أو التعريف وبيانات الطلب المعتادة، بحسب الحاجة، إلى Free Dictionary API أو Wikimedia/Wiktionary أو Microsoft Azure Translator أو Datamuse أو MyMemory. ما نرسل بريدك ولا مكتبتك كاملة لهالخدمات.",
+          "توفّر Supabase تسجيل الدخول وقاعدة البيانات. منطقة قاعدة بيانات EBARA الحالية في طوكيو باليابان، لذلك قد تُعالج بيانات الحساب والمكتبة خارج المملكة العربية السعودية. وقد ترسل عملية البحث الكلمة أو العبارة أو الجملة القصيرة أو التعريف وبيانات الطلب المعتادة، بحسب الحاجة، إلى Free Dictionary API أو Wikimedia/Wiktionary أو Microsoft Azure Translator أو Datamuse أو MyMemory. المسار الاحتياطي للمايك يرسل المقطع الصوتي القصير الحالي فقط إلى Microsoft Azure Speech. ما نرسل بريدك ولا مكتبتك كاملة لهالخدمات.",
           "كل مزوّد يطبّق شروطه وسياسة خصوصيته. EBARA ما تبيع بياناتك الشخصية ولا تستخدم كلماتك للإعلانات الموجّهة.",
         ],
       },
