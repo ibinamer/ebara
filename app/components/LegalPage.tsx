@@ -22,7 +22,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
   en: {
     title: "Privacy notice",
     summary: "What EBARA collects, why it is needed, and the choices you have.",
-    updated: "Last updated: 24 August 2026",
+    updated: "Last updated: 25 August 2026",
     sections: [
       {
         title: "Who controls your data",
@@ -34,7 +34,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
         title: "Data we process",
         items: [
           "Account data: your display name, email address, encrypted authentication credentials, account identifiers, and session information.",
-          "Vocabulary data: saved words, Arabic meanings, definitions, pronunciation and IPA, part of speech, examples, personal notes, and timestamps.",
+          "Vocabulary data: saved words, expressions or short sentences, Arabic meanings, definitions when available, pronunciation and IPA, part of speech, examples, personal notes, and timestamps.",
           "Technical data needed for security and delivery, such as IP address, browser details, request logs, and rate-limit records.",
           "Guest data: words and language preference stored only in your browser until you clear them or create an account.",
         ],
@@ -54,7 +54,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "Service providers and international processing",
         paragraphs: [
-          "Supabase provides authentication and database hosting. The current EBARA database region is Tokyo, Japan, so account and vocabulary data may be processed outside Saudi Arabia. Dictionary lookups may send the word or definition and ordinary request metadata to Free Dictionary API, Wikimedia/Wiktionary, Microsoft Azure Translator, or MyMemory. We do not send your email address or your complete library to dictionary providers.",
+          "Supabase provides authentication and database hosting. The current EBARA database region is Tokyo, Japan, so account and vocabulary data may be processed outside Saudi Arabia. A lookup may send the word, expression, short sentence, or definition and ordinary request metadata to Free Dictionary API, Wikimedia/Wiktionary, Microsoft Azure Translator, Datamuse, or MyMemory as needed. We do not send your email address or your complete library to these providers.",
           "Each provider applies its own terms and privacy notice. EBARA does not sell personal data and does not use your vocabulary for targeted advertising.",
         ],
       },
@@ -92,7 +92,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
   ar: {
     title: "إشعار الخصوصية",
     summary: "وش نجمع في EBARA، وليش نحتاجه، والخيارات المتاحة لك.",
-    updated: "آخر تحديث: ٢٤ أغسطس ٢٠٢٦",
+    updated: "آخر تحديث: ٢٥ أغسطس ٢٠٢٦",
     sections: [
       {
         title: "جهة التحكم ببياناتك",
@@ -104,7 +104,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
         title: "البيانات اللي نعالجها",
         items: [
           "بيانات الحساب: اسم العرض، بريدك الإلكتروني، بيانات الدخول المشفّرة، معرّفات الحساب، ومعلومات الجلسة.",
-          "بيانات المكتبة: الكلمات المحفوظة، المعاني والتعريفات، النطق والـ IPA، نوع الكلمة، الأمثلة، ملاحظاتك، وتاريخ الإضافة.",
+          "بيانات المكتبة: الكلمات أو العبارات أو الجمل القصيرة المحفوظة، والمعاني والتعريفات عند توفرها، والنطق والـ IPA، ونوع المدخل، والأمثلة، وملاحظاتك، وتاريخ الإضافة.",
           "بيانات تقنية لازمة للحماية وتشغيل الخدمة، مثل عنوان IP ونوع المتصفح وسجلات الطلبات وحدود الاستخدام.",
           "بيانات الزائر: الكلمات واللغة المختارة محفوظة داخل متصفحك فقط إلى أن تمسحها أو تنشئ حساباً.",
         ],
@@ -124,7 +124,7 @@ const privacyCopy: Record<"en" | "ar", LegalCopy> = {
       {
         title: "مقدمو الخدمة والمعالجة خارج المملكة",
         paragraphs: [
-          "توفّر Supabase تسجيل الدخول وقاعدة البيانات. منطقة قاعدة بيانات EBARA الحالية في طوكيو باليابان، لذلك قد تُعالج بيانات الحساب والمكتبة خارج المملكة العربية السعودية. وقد ترسل عمليات البحث الكلمة أو التعريف وبيانات الطلب المعتادة إلى Free Dictionary API أو Wikimedia/Wiktionary أو Microsoft Azure Translator أو MyMemory. ما نرسل بريدك ولا مكتبتك كاملة لمزوّدي القواميس.",
+          "توفّر Supabase تسجيل الدخول وقاعدة البيانات. منطقة قاعدة بيانات EBARA الحالية في طوكيو باليابان، لذلك قد تُعالج بيانات الحساب والمكتبة خارج المملكة العربية السعودية. وقد ترسل عملية البحث الكلمة أو العبارة أو الجملة القصيرة أو التعريف وبيانات الطلب المعتادة، بحسب الحاجة، إلى Free Dictionary API أو Wikimedia/Wiktionary أو Microsoft Azure Translator أو Datamuse أو MyMemory. ما نرسل بريدك ولا مكتبتك كاملة لهالخدمات.",
           "كل مزوّد يطبّق شروطه وسياسة خصوصيته. EBARA ما تبيع بياناتك الشخصية ولا تستخدم كلماتك للإعلانات الموجّهة.",
         ],
       },

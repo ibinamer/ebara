@@ -18,7 +18,7 @@ const MYMEMORY_API_URL = "https://api.mymemory.translated.net/get";
 const MAX_BODY_BYTES = 2_048;
 const MAX_WORD_LENGTH = 80;
 const MAX_UPSTREAM_BYTES = 1_500_000;
-const REQUEST_TIMEOUT_MS = 12_000;
+const REQUEST_TIMEOUT_MS = 8_000;
 const METADATA_TIMEOUT_MS = 2_500;
 const AUTH_TIMEOUT_MS = 8_000;
 // Every outbound call below is a single-shot request to a third-party service
@@ -28,14 +28,15 @@ const AUTH_TIMEOUT_MS = 8_000;
 // same request once, after a short pause, clears the vast majority of these
 // without meaningfully slowing down the common case where the first attempt
 // just works.
-const FETCH_ATTEMPTS = 3;
+const FETCH_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 350;
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
 const MAX_RATE_BUCKETS = 2_000;
 const SHARED_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
-const MAX_TERM_WORDS = 6;
+const MAX_INPUT_LENGTH = 160;
+const MAX_INPUT_WORDS = 12;
 
 // A single orthographic word, optionally hyphenated or apostrophised.
 const LATIN_WORD_SOURCE = String.raw`\p{Script=Latin}+(?:['\-\u2019]\p{Script=Latin}+)*`;
@@ -45,7 +46,96 @@ const LATIN_TERM_PATTERN = new RegExp(
   `^${LATIN_WORD_SOURCE}(?: ${LATIN_WORD_SOURCE})*$`,
   "u",
 );
+const LATIN_TOKEN_PATTERN = new RegExp(LATIN_WORD_SOURCE, "gu");
+const ALLOWED_INPUT_PATTERN = /^[\p{Script=Latin}\s,'\-.!?]+$/u;
 const ARABIC_CHARACTER_PATTERN = /\p{Script=Arabic}/u;
+
+const SENTENCE_STARTERS = new Set([
+  "i",
+  "you",
+  "he",
+  "she",
+  "it",
+  "we",
+  "they",
+  "this",
+  "that",
+  "these",
+  "those",
+  "there",
+  "let's",
+]);
+const SENTENCE_AUXILIARIES = new Set([
+  "am",
+  "is",
+  "are",
+  "was",
+  "were",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "can",
+  "could",
+  "shall",
+  "should",
+  "may",
+  "might",
+  "must",
+]);
+const VOCABULARY_STOP_WORDS = new Set([
+  ...SENTENCE_STARTERS,
+  ...SENTENCE_AUXILIARIES,
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "but",
+  "if",
+  "then",
+  "than",
+  "as",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "of",
+  "on",
+  "to",
+  "with",
+  "my",
+  "your",
+  "his",
+  "her",
+  "our",
+  "their",
+  "me",
+  "him",
+  "us",
+  "them",
+  "so",
+  "very",
+  "really",
+  "just",
+  "too",
+  "not",
+  "no",
+  "yes",
+]);
+
+type ParsedVocabularyInput = {
+  display: string;
+  dictionaryTerm: string;
+  cacheKey: string;
+  wordCount: number;
+};
 
 function isMultiWordTerm(value: string): boolean {
   return value.trim().includes(" ");
@@ -228,15 +318,16 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const word = parseWordPayload(payload);
-  if (!word) {
+  const input = parseWordPayload(payload);
+  if (!input) {
     return errorResponse(
       "INVALID_PAYLOAD",
-      "Send exactly one English word in the word field.",
+      "Send one English word, expression, or short sentence in the word field.",
       400,
       rate,
     );
   }
+  const word = input.display;
 
   const hasBearerToken = /^Bearer\s+\S+$/iu.test(
     request.headers.get("authorization")?.trim() ?? "",
@@ -263,10 +354,19 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // Obvious short sentences do not benefit from three dictionary requests.
+  // Translate them directly, then let the client offer their useful content
+  // words as vocabulary candidates. Ambiguous expressions still continue to
+  // the dictionaries so idioms such as "break a leg" are not translated
+  // literally.
+  if (looksLikeSentence(input)) {
+    return translationOnlyResponse(input, rate, "sentence");
+  }
+
   // Completed dictionary records contain no user data, so they can be shared
   // safely across accounts. This avoids paying for or waiting on the same
   // provider lookup again when another learner saves the same word.
-  const sharedCached = await findSharedDictionaryEntry(request, word);
+  const sharedCached = await findSharedDictionaryEntry(request, input.cacheKey);
   if (sharedCached) {
     return Response.json(
       { ok: true as const, cached: true, data: sharedCached },
@@ -278,10 +378,12 @@ export async function POST(request: Request): Promise<Response> {
   // independent reads. Datamuse ranks parts of speech by popularity in Google
   // Books Ngrams, preventing rare senses such as the noun form of "high" from
   // appearing before the everyday adjective.
-  const partOfSpeechRankingPromise = fetchPopularPartsOfSpeech(word);
+  const partOfSpeechRankingPromise = fetchPopularPartsOfSpeech(
+    input.dictionaryTerm,
+  );
   const [english, mainWikitext, partOfSpeechRanking] = await Promise.all([
-    fetchEnglishDictionary(word, partOfSpeechRankingPromise),
-    fetchWiktionaryWikitext(word),
+    fetchEnglishDictionary(input.dictionaryTerm, partOfSpeechRankingPromise),
+    fetchWiktionaryWikitext(input.dictionaryTerm),
     partOfSpeechRankingPromise,
   ]);
 
@@ -292,10 +394,10 @@ export async function POST(request: Request): Promise<Response> {
   // the broadly documented sense instead.
   const fromWiktionary =
     mainWikitext.ok && mainWikitext.data &&
-    (!english.ok || isMultiWordTerm(word))
+    (!english.ok || isMultiWordTerm(input.dictionaryTerm))
       ? await parseWiktionaryDefinition(
           mainWikitext.data,
-          word,
+          input.dictionaryTerm,
           partOfSpeechRanking,
         )
       : null;
@@ -318,7 +420,17 @@ export async function POST(request: Request): Promise<Response> {
     // Wiktionary was already fetched in parallel and is a fully independent
     // source, so its wikitext can rescue this lookup no matter *why* Free
     // Dictionary failed — a clean 404 or a transient timeout/5xx.
-    if (!fromWiktionary) return lookupErrorResponse(english, rate);
+    if (!fromWiktionary) {
+      if (input.wordCount > 1) {
+        return translationOnlyResponse(input, rate, "expression");
+      }
+
+      const suggestions =
+        english.code === "DICTIONARY_NOT_FOUND"
+          ? await fetchSpellingSuggestions(input.dictionaryTerm)
+          : [];
+      return lookupErrorResponse(english, rate, suggestions);
+    }
     englishData = fromWiktionary;
   }
 
@@ -397,13 +509,15 @@ export async function POST(request: Request): Promise<Response> {
   // Only complete automatic records are shared. Any manual gloss belongs to
   // the learner who entered it and is saved in that learner's own collection.
   if (!needsArabicMeaning) {
-    await storeSharedDictionaryEntry(request, word, data);
+    await storeSharedDictionaryEntry(request, input.cacheKey, data);
   }
 
   return Response.json(
     {
       ok: true as const,
       cached: false,
+      entry_kind: isMultiWordTerm(englishData.word) ? "phrase" : "word",
+      vocabulary_suggestions: [] as string[],
       needs_arabic_meaning: needsArabicMeaning,
       data,
     },
@@ -895,9 +1009,19 @@ async function findCachedWord(
 function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
   if (!isRecord(value)) return null;
 
-  const word = normalizeDictionaryWord(value.word);
+  const partOfSpeech = boundedString(value.part_of_speech, 80);
+  const translationOnly =
+    partOfSpeech === "sentence" || partOfSpeech === "expression";
+  const storedInput = optionalBoundedString(value.word, MAX_INPUT_LENGTH);
+  const word = translationOnly
+    ? storedInput && ALLOWED_INPUT_PATTERN.test(storedInput)
+      ? storedInput
+      : null
+    : normalizeDictionaryWord(value.word);
   const meaningAr = boundedString(value.meaning_ar, 512);
-  const definition = boundedString(value.definition_en, 1_500);
+  const definition = translationOnly
+    ? optionalBoundedString(value.definition_en, 1_500)
+    : boundedString(value.definition_en, 1_500);
   // definition_ar is optional at the cache layer, not required: rows saved
   // before this field existed have it as an empty string, and that must
   // still load successfully rather than erroring on every previously-saved
@@ -906,14 +1030,13 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
   const pronunciation = optionalBoundedString(value.pronunciation, 160);
   const audioUrl = normalizeDictionaryAudioUrl(value.audio_url ?? "");
   const ipa = optionalBoundedString(value.ipa, 180);
-  const partOfSpeech = boundedString(value.part_of_speech, 80);
   const example = optionalBoundedString(value.example_sentence, 1_000);
 
   if (
     !word ||
     !meaningAr ||
     !ARABIC_CHARACTER_PATTERN.test(meaningAr) ||
-    !definition ||
+    definition === null ||
     pronunciation === null ||
     audioUrl === null ||
     ipa === null ||
@@ -936,23 +1059,105 @@ function parseCachedDictionaryResult(value: unknown): DictionaryResult | null {
   };
 }
 
-function parseWordPayload(payload: unknown): string | null {
+function parseWordPayload(payload: unknown): ParsedVocabularyInput | null {
   if (!isRecord(payload)) return null;
 
   const keys = Object.keys(payload);
   if (keys.length !== 1 || keys[0] !== "word") return null;
   if (typeof payload.word !== "string") return null;
 
-  const word = payload.word
+  const display = payload.word
     .normalize("NFKC")
+    .replace(/[’]/gu, "'")
+    .replace(/[–—]/gu, "-")
     .trim()
     .replace(/\s+/gu, " ")
-    .toLocaleLowerCase("en");
-  if (!word || word.length > MAX_WORD_LENGTH) return null;
-  if (word.split(" ").length > MAX_TERM_WORDS) return null;
-  if (!LATIN_TERM_PATTERN.test(word)) return null;
+    .replace(/\s+([,.!?])/gu, "$1");
+  if (!display || display.length > MAX_INPUT_LENGTH) return null;
+  if (!ALLOWED_INPUT_PATTERN.test(display)) return null;
+  if (/\.{2,}|[!?]{2,}|[,!?]\s*[,!?]/u.test(display)) return null;
 
-  return word;
+  const tokens = display.match(LATIN_TOKEN_PATTERN) ?? [];
+  if (tokens.length === 0 || tokens.length > MAX_INPUT_WORDS) return null;
+
+  const dictionaryTerm = display
+    .replace(/[,.!?]+$/gu, "")
+    .replace(/[,!?]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLocaleLowerCase("en");
+  if (!dictionaryTerm || !LATIN_TERM_PATTERN.test(dictionaryTerm)) return null;
+
+  return {
+    display,
+    dictionaryTerm,
+    cacheKey: display.toLocaleLowerCase("en"),
+    wordCount: tokens.length,
+  };
+}
+
+function inputWords(value: string): string[] {
+  return (value.match(LATIN_TOKEN_PATTERN) ?? []).map((word) =>
+    word.toLocaleLowerCase("en"),
+  );
+}
+
+function looksLikeSentence(input: ParsedVocabularyInput): boolean {
+  if (input.wordCount < 3) return false;
+  const words = inputWords(input.display);
+  const first = words[0] ?? "";
+  if (SENTENCE_STARTERS.has(first)) return true;
+  if (words.some((word) => SENTENCE_AUXILIARIES.has(word))) return true;
+  return words.some((word) => /^(?:i|you|he|she|it|we|they)'(?:m|re|ve|ll|d|s)$/u.test(word));
+}
+
+function vocabularySuggestions(value: string): string[] {
+  const suggestions: string[] = [];
+  for (const word of inputWords(value)) {
+    if (
+      word.length < 3 ||
+      VOCABULARY_STOP_WORDS.has(word) ||
+      suggestions.includes(word)
+    ) {
+      continue;
+    }
+    suggestions.push(word);
+    if (suggestions.length === 4) break;
+  }
+  return suggestions;
+}
+
+async function translationOnlyResponse(
+  input: ParsedVocabularyInput,
+  rate: RateDecision,
+  kind: "expression" | "sentence",
+): Promise<Response> {
+  const translation = await translateToArabic(input.display);
+  if (!translation.ok) return lookupErrorResponse(translation, rate);
+
+  const data: DictionaryResult = {
+    word: input.display,
+    meaning_ar: translation.data,
+    definition_en: "",
+    definition_ar: "",
+    pronunciation: "",
+    audio_url: "",
+    ipa: "",
+    part_of_speech: kind,
+    example_sentence: "",
+  };
+
+  return Response.json(
+    {
+      ok: true as const,
+      cached: false,
+      entry_kind: kind,
+      vocabulary_suggestions: vocabularySuggestions(input.display),
+      needs_arabic_meaning: false,
+      data,
+    },
+    { status: 200, headers: responseHeaders(rate) },
+  );
 }
 
 async function fetchEnglishDictionary(
@@ -1133,6 +1338,39 @@ async function fetchPopularPartsOfSpeech(word: string): Promise<string[]> {
   } catch {
     // Popularity metadata improves sense ordering but is never required for a
     // dictionary lookup to succeed.
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchSpellingSuggestions(word: string): Promise<string[]> {
+  const url = new URL(DATAMUSE_API_URL);
+  url.searchParams.set("sp", word);
+  url.searchParams.set("max", "5");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), METADATA_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) return [];
+
+    const json = await readBoundedJson(response);
+    if (!json.ok || !Array.isArray(json.data)) return [];
+
+    return unique(
+      json.data.flatMap((value) => {
+        if (!isRecord(value)) return [];
+        const candidate = normalizeDictionaryWord(value.word);
+        return candidate && candidate !== word ? [candidate] : [];
+      }),
+    ).slice(0, 5);
+  } catch {
     return [];
   } finally {
     clearTimeout(timeout);
@@ -1855,6 +2093,7 @@ function lookupFailure(
 function lookupErrorResponse(
   failure: LookupFailure,
   rate: RateDecision,
+  suggestions: string[] = [],
 ): Response {
   return errorResponse(
     failure.code,
@@ -1862,6 +2101,7 @@ function lookupErrorResponse(
     failure.status,
     rate,
     failure.retryAfter ? { "Retry-After": failure.retryAfter } : undefined,
+    suggestions.length > 0 ? { suggestions } : undefined,
   );
 }
 
@@ -2088,12 +2328,14 @@ function errorResponse(
   status: number,
   rate: RateDecision,
   extraHeaders?: HeadersInit,
+  details?: Record<string, unknown>,
 ): Response {
   return Response.json(
     {
       ok: false as const,
       error: { code, message },
       message,
+      ...details,
     },
     { status, headers: responseHeaders(rate, extraHeaders) },
   );

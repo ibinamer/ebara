@@ -247,11 +247,11 @@ in `app/globals.css`.
 
 ## Words and phrases
 
-A saved entry can be a single word or a short set phrase — "catch up", "get it",
-"look forward to" — up to six words. Anything spanning more than one word is
-filed under the `phrase` type, so phrasal verbs and idioms collect in one
-browsable filter instead of scattering across the noun and verb buckets their
-head word happens to carry.
+A saved entry can be a single word, a set phrase such as "catch up", or one
+short English sentence up to 12 words and 160 characters. Dictionary-backed
+phrases keep the `phrase` type; inputs without a published dictionary entry are
+stored honestly as `expression` or `sentence` records with no invented
+definition, IPA, or pronunciation.
 
 The Free Dictionary API is organised around single words and has no entry for
 some ordinary phrases ("get it" returns 404 there). When that happens the server
@@ -261,26 +261,32 @@ generated text.
 
 ## Dictionary lookup and save flow
 
-1. The browser normalizes the recognized or typed English word and checks the
-   owner's already-loaded collection first.
+1. The browser preserves the recognized or typed English casing and meaningful
+   punctuation, then checks the owner's already-loaded collection first.
 2. The authenticated server route repeats an owner-scoped Supabase lookup. If
    the word is already saved, it returns that stored record and makes no
    external dictionary request. This also covers stale tabs and other devices.
-3. For a genuinely new word, the server retrieves the English entries from
+3. An obvious short sentence goes directly to Azure in one request. EBARA
+   returns its Arabic translation and suggests useful content words that the
+   learner can save, keeping the original sentence as their example.
+4. For a genuinely new word or ambiguous phrase, the server retrieves the English entries from
    `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`. Datamuse ranks
    parts of speech by popularity in Google Books Ngrams, and the server selects
    the first dictionary definition inside the most popular category. This keeps
    an everyday adjective such as `high` from opening on its rare noun sense.
-4. When Azure is configured, Dictionary Lookup selects a short Arabic meaning
+5. When Azure is configured, Dictionary Lookup selects a short Arabic meaning
    that matches the English entry's part of speech. Wiktionary remains the
    curated fallback through `https://en.wiktionary.org/w/api.php`.
-5. Azure Text Translation translates the selected English definition into
+6. Azure Text Translation translates the selected English definition into
    Arabic. MyMemory is attempted only if Azure is unavailable or the protected
    monthly cap has been reached.
-6. When the hosting runtime exposes a shared cache, completed public dictionary
+7. If neither dictionary has a published multiword entry, Azure translates it
+   directly as an expression instead of returning a misleading dictionary
+   error. Missing single words still receive spelling suggestions first.
+8. When the hosting runtime exposes a shared cache, completed public dictionary
    records are cached for 30 days across users. Owner-scoped Supabase records
    remain the durable cache on every supported runtime.
-7. The completed record is inserted once into the owner's Supabase collection.
+9. The completed record is inserted once into the owner's Supabase collection.
    A case-insensitive unique database index is the race-safe duplicate guard.
 
 No generated fallback is substituted when a word or Arabic dictionary meaning

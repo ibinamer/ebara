@@ -40,7 +40,13 @@ import { WordDetailsDialog } from "./components/WordDetailsDialog";
 import { WordFacts, WordHeadline } from "./components/WordFacts";
 import { StatsSkeleton, WordGridSkeleton } from "./components/Skeletons";
 import { useI18n, type Translate } from "@/lib/i18n";
-import { capitalize, normalizeCandidate, sanitizeLiveInput } from "@/lib/speech";
+import {
+  capitalize,
+  normalizeCandidate,
+  normalizeVocabularyInput,
+  sanitizeLiveInput,
+  vocabularyInputKey,
+} from "@/lib/speech";
 import { createVocabularyClient } from "@/lib/supabase";
 import {
   calculateStats,
@@ -203,24 +209,25 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
 const GUEST_WORDS_STORAGE_KEY = "vocabulary-box:guest-words";
 const GUEST_ACTIVE_STORAGE_KEY = "vocabulary-box:guest-active";
 
-/** One word, or several separated by single spaces — "catch up", "get it". */
-const TERM_PATTERN = /^[a-z]+(?:['-][a-z]+)*(?: [a-z]+(?:['-][a-z]+)*)*$/;
-const MAX_TERM_WORDS = 6;
+const INPUT_PATTERN = /^[a-zA-Z\s,'\-.!?]+$/;
+const MAX_INPUT_WORDS = 12;
+const MAX_INPUT_LENGTH = 160;
 
 function fallbackDictionaryEntry(value: string): DictionaryEntry {
-  const normalized = normalizeCandidate(value);
-  const known = DEMO_DICTIONARY[normalized];
+  const display = normalizeVocabularyInput(value);
+  const dictionaryKey = normalizeCandidate(display);
+  const known = DEMO_DICTIONARY[dictionaryKey];
   if (known) return known;
 
   return {
-    word: normalized,
+    word: display,
     meaning_ar: "معنى تجريبي",
     definition_en: "Dictionary details are available after the live services are connected.",
     definition_ar: "تفاصيل القاموس متاحة بعد الاتصال بالخدمات الفعلية.",
     pronunciation: "",
     audio_url: "",
     ipa: "",
-    part_of_speech: normalized.includes(" ") ? "phrase" : "word",
+    part_of_speech: display.includes(" ") ? "phrase" : "word",
     example_sentence: "",
   };
 }
@@ -461,7 +468,12 @@ export default function Ebara({
   }
 
   async function handleSave(dictionaryEntry: DictionaryEntry) {
-    if (words.some((entry) => entry.word.toLowerCase() === dictionaryEntry.word.toLowerCase())) {
+    if (
+      words.some(
+        (entry) =>
+          vocabularyInputKey(entry.word) === vocabularyInputKey(dictionaryEntry.word),
+      )
+    ) {
       throw new Error(t("add.errDuplicate"));
     }
 
@@ -1163,6 +1175,7 @@ function AddWordDialog({
   const [step, setStep] = useState<AddStep>("capture");
   const [draft, setDraft] = useState("");
   const [voiceAlternatives, setVoiceAlternatives] = useState<SpeechAlternative[]>([]);
+  const [vocabularySuggestions, setVocabularySuggestions] = useState<string[]>([]);
   const [dictionaryEntry, setDictionaryEntry] = useState<DictionaryEntry | null>(null);
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1186,20 +1199,25 @@ function AddWordDialog({
     };
   }, []);
 
-  async function lookupWord(candidate: string) {
-    const normalized = normalizeCandidate(candidate);
+  async function lookupWord(
+    candidate: string,
+    options?: { exampleSentence?: string },
+  ) {
+    const normalized = normalizeVocabularyInput(candidate);
+    const wordCount = normalized.match(/[a-z]+(?:['-][a-z]+)*/gi)?.length ?? 0;
     if (
       !normalized ||
-      normalized.length > 80 ||
-      normalized.split(" ").length > MAX_TERM_WORDS ||
-      !TERM_PATTERN.test(normalized)
+      normalized.length > MAX_INPUT_LENGTH ||
+      wordCount === 0 ||
+      wordCount > MAX_INPUT_WORDS ||
+      !INPUT_PATTERN.test(normalized)
     ) {
       setError(t("add.errOneWord"));
       return;
     }
 
     const existingWord = savedWords.find(
-      (entry) => normalizeCandidate(entry.word) === normalized,
+      (entry) => vocabularyInputKey(entry.word) === vocabularyInputKey(normalized),
     );
     if (existingWord) {
       setError(t("add.errDuplicate"));
@@ -1213,6 +1231,7 @@ function AddWordDialog({
       if (demoMode) {
         await new Promise((resolve) => window.setTimeout(resolve, 650));
         result = fallbackDictionaryEntry(normalized);
+        setVocabularySuggestions([]);
       } else {
         const response = await fetch("/api/dictionary", {
           method: "POST",
@@ -1227,10 +1246,21 @@ function AddWordDialog({
           message?: string;
           data?: DictionaryEntry;
           needs_arabic_meaning?: boolean;
+          entry_kind?: "word" | "phrase" | "expression" | "sentence";
+          suggestions?: string[];
+          vocabulary_suggestions?: string[];
         };
         if (!response.ok) {
           const apiCode = typeof payload.error === "object" ? payload.error?.code : null;
-          if (apiCode === "DICTIONARY_NOT_FOUND") throw new Error(t("add.errNotFound"));
+          if (apiCode === "DICTIONARY_NOT_FOUND") {
+            setVoiceAlternatives(
+              (payload.suggestions ?? []).map((transcript) => ({
+                transcript,
+                confidence: 0,
+              })),
+            );
+            throw new Error(t("add.errNotFound"));
+          }
           if (apiCode === "RATE_LIMITED" || apiCode?.endsWith("_RATE_LIMITED")) {
             throw new Error(t("add.errRateLimited"));
           }
@@ -1240,10 +1270,15 @@ function AddWordDialog({
           throw new Error(t("add.errNotFound"));
         }
         result = payload.data ?? payload;
+        setVocabularySuggestions(payload.vocabulary_suggestions ?? []);
       }
 
-      setDraft(result.word);
-      setDictionaryEntry(result);
+      const nextEntry = {
+        ...result,
+        example_sentence: options?.exampleSentence ?? result.example_sentence,
+      };
+      setDraft(nextEntry.word);
+      setDictionaryEntry(nextEntry);
       setStep("review");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("add.errNotFound"));
@@ -1288,7 +1323,7 @@ function AddWordDialog({
       const alternatives = Array.from({ length: finalResult.length }, (_, index) => {
         const item = finalResult[index];
         return {
-          transcript: normalizeCandidate(item.transcript),
+          transcript: normalizeVocabularyInput(item.transcript),
           confidence: item.confidence,
         };
       }).filter((item) => item.transcript);
@@ -1486,6 +1521,45 @@ function AddWordDialog({
             }
           />
 
+          {vocabularySuggestions.length > 0 && (
+            <div
+              className="mt-6 rounded-2xl border p-4"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface-2)",
+              }}
+            >
+              <p className="type-body font-semibold" style={{ color: "var(--text)" }}>
+                {t("add.sentenceSuggestionTitle")}
+              </p>
+              <p className="type-caption mt-1.5" style={{ color: "var(--text-muted)" }}>
+                {t("add.sentenceSuggestionHint")}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {vocabularySuggestions.map((suggestion, index) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() =>
+                      void lookupWord(suggestion, {
+                        exampleSentence: dictionaryEntry.word,
+                      })
+                    }
+                    className="chip"
+                    disabled={isProcessing || isSaving}
+                  >
+                    <span dir="ltr" className="bidi-isolate">
+                      {suggestion}
+                    </span>
+                    {index === 0 && (
+                      <span className="chip-count">{t("add.recommended")}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {error && <DialogError message={error} />}
 
           <div className="mt-7 flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-between">
@@ -1511,7 +1585,11 @@ function AddWordDialog({
               ) : (
                 <Plus size={17} aria-hidden="true" />
               )}
-              {isSaving ? t("add.saving") : t("add.save")}
+              {isSaving
+                ? t("add.saving")
+                : dictionaryEntry.part_of_speech === "sentence"
+                  ? t("add.saveSentence")
+                  : t("add.save")}
             </button>
           </div>
         </div>

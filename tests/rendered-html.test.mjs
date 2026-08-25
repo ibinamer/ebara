@@ -117,6 +117,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     route,
     migration,
     audioMigration,
+    translationOnlyMigration,
     speech,
     usageMeter,
     usageSchema,
@@ -140,6 +141,13 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
     readFile(
       new URL(
         "../supabase/migrations/20260823195227_add_dictionary_audio_url.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
+      new URL(
+        "../supabase/migrations/20260825034500_allow_translation_only_entries.sql",
         import.meta.url,
       ),
       "utf8",
@@ -209,6 +217,15 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(audioMigration, /add column audio_url text not null default ''/i);
   assert.match(audioMigration, /api\[\.\]dictionaryapi\[\.\]dev/);
   assert.match(audioMigration, /ssl\[\.\]gstatic\[\.\]com/);
+  assert.match(translationOnlyMigration, /char_length\(word\) between 1 and 160/i);
+  assert.match(
+    translationOnlyMigration,
+    /char_length\(definition_en\) between 0 and 1500/i,
+  );
+  assert.match(route, /translationOnlyResponse/);
+  assert.match(route, /vocabulary_suggestions/);
+  assert.match(app, /add\.sentenceSuggestionTitle/);
+  assert.match(speech, /normalizeVocabularyInput/);
 
   const duplicateGuardIndex = app.indexOf("const existingWord = savedWords.find");
   const dictionaryFetchIndex = app.search(/fetch\(["']\/api\/dictionary["']/);
@@ -331,6 +348,12 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   );
   await access(new URL("../supabase/migrations/20260801190000_initial_vocabulary_box.sql", import.meta.url));
   await access(new URL("../supabase/migrations/20260823195227_add_dictionary_audio_url.sql", import.meta.url));
+  await access(
+    new URL(
+      "../supabase/migrations/20260825034500_allow_translation_only_entries.sql",
+      import.meta.url,
+    ),
+  );
   await access(projectRoot);
 });
 
@@ -1082,6 +1105,95 @@ test("keeps an Azure phrase meaning short and translates its definition separate
   }
 });
 
+test("translates an obvious short sentence directly and suggests its useful word", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
+  const azureInputs = [];
+
+  process.env.AZURE_TRANSLATOR_KEY = "test-server-only-key";
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+    assert.equal(url.hostname, "api.cognitive.microsofttranslator.com");
+    assert.equal(url.pathname, "/translate");
+    const text = JSON.parse(String(init?.body))[0].Text;
+    azureInputs.push(text);
+    return Response.json([
+      { translations: [{ text: "إنه وسيم جدًا", to: "ar" }] },
+    ]);
+  };
+
+  try {
+    const response = await callDictionary("He is so handsome", {
+      DB: createUsageDatabase(),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.entry_kind, "sentence");
+    assert.deepEqual(payload.vocabulary_suggestions, ["handsome"]);
+    assert.equal(payload.data.word, "He is so handsome");
+    assert.equal(payload.data.meaning_ar, "إنه وسيم جدًا");
+    assert.equal(payload.data.definition_en, "");
+    assert.equal(payload.data.part_of_speech, "sentence");
+    assert.deepEqual(azureInputs, ["He is so handsome"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
+    } else {
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
+    }
+  }
+});
+
+test("offers spelling suggestions for a missing single word instead of translating it", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
+
+  delete process.env.AZURE_TRANSLATOR_KEY;
+  globalThis.fetch = async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    );
+    if (url.hostname === "api.dictionaryapi.dev") {
+      return Response.json({ title: "No Definitions Found" }, { status: 404 });
+    }
+    if (url.hostname === "en.wiktionary.org") {
+      return Response.json({ error: { code: "missingtitle" } });
+    }
+    if (url.hostname === "api.datamuse.com") {
+      return url.searchParams.get("max") === "5"
+        ? Response.json([{ word: "perseverance", score: 998 }])
+        : Response.json([]);
+    }
+    throw new Error(`Unexpected request in spelling suggestion test: ${url}`);
+  };
+
+  try {
+    const response = await callDictionary("perserverance");
+    const payload = await response.json();
+    assert.equal(response.status, 404, JSON.stringify(payload));
+    assert.equal(payload.error.code, "DICTIONARY_NOT_FOUND");
+    assert.deepEqual(payload.suggestions, ["perseverance"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalAzureKey === undefined) {
+      delete process.env.AZURE_TRANSLATOR_KEY;
+    } else {
+      process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
+    }
+  }
+});
+
 test("uses translation coverage to prefer the broadly documented phrase sense", async () => {
   const originalFetch = globalThis.fetch;
   const originalAzureKey = process.env.AZURE_TRANSLATOR_KEY;
@@ -1174,6 +1286,15 @@ test("server-renders bilingual legal pages", async () => {
     const html = await response.text();
     assert.match(html, /EBARA/);
     assert.match(html, pathname === "/privacy" ? /Privacy notice/ : /Terms of use/);
-    assert.match(html, /Last updated: 24 August 2026/);
+    assert.match(
+      html,
+      pathname === "/privacy"
+        ? /Last updated: 25 August 2026/
+        : /Last updated: 24 August 2026/,
+    );
+    if (pathname === "/privacy") {
+      assert.match(html, /short sentence/);
+      assert.match(html, /Datamuse/);
+    }
   }
 });

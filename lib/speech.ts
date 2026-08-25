@@ -87,11 +87,27 @@ export function speakWord(value: string, dictionaryAudioUrl?: string): void {
 }
 
 export function normalizeCandidate(value: string): string {
-  return value
+  return normalizeVocabularyInput(value)
     .toLowerCase()
     .replace(/[^a-z\s'-]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Preserves the casing and punctuation needed to translate a short sentence. */
+export function normalizeVocabularyInput(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.!?])/g, "$1")
+    .trim();
+}
+
+/** Stable duplicate key without changing the value shown or translated. */
+export function vocabularyInputKey(value: string): string {
+  return normalizeVocabularyInput(value).toLocaleLowerCase("en");
 }
 
 /**
@@ -104,7 +120,12 @@ export function normalizeCandidate(value: string): string {
  * still runs once on submission to collapse and trim the final value.
  */
 export function sanitizeLiveInput(value: string): string {
-  return value.toLowerCase().replace(/[^a-z\s'-]/g, "");
+  return value
+    .normalize("NFKC")
+    .replace(/[’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/[^a-zA-Z\s,'\-.!?]/g, "")
+    .slice(0, 160);
 }
 
 export function capitalize(value: string): string {

@@ -82,25 +82,41 @@ export function WordFacts({
         )}
       </Row>
 
-      <Row label={t("word.definition")}>
-        <p
-          dir="ltr"
-          className="force-ltr type-body max-w-2xl"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {entry.definition_en}
-        </p>
-        {entry.definition_ar && (
+      {(entry.definition_en || entry.definition_ar) && (
+        <Row label={t("word.definition")}>
+          {entry.definition_en && (
+            <p
+              dir="ltr"
+              className="force-ltr type-body max-w-2xl"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {entry.definition_en}
+            </p>
+          )}
+          {entry.definition_ar && (
+            <p
+              lang="ar"
+              dir="rtl"
+              className="bidi-isolate text-ui-start type-body mt-2.5 max-w-2xl"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {entry.definition_ar}
+            </p>
+          )}
+        </Row>
+      )}
+
+      {entry.example_sentence && (
+        <Row label={t("word.example")}>
           <p
-            lang="ar"
-            dir="rtl"
-            className="bidi-isolate text-ui-start type-body mt-2.5 max-w-2xl"
+            dir="ltr"
+            className="force-ltr type-body max-w-2xl"
             style={{ color: "var(--text-muted)" }}
           >
-            {entry.definition_ar}
+            {entry.example_sentence}
           </p>
-        )}
-      </Row>
+        </Row>
+      )}
     </div>
   );
 }
