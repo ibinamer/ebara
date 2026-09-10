@@ -14,6 +14,14 @@ export type Locale = "en" | "ar";
 export const LOCALE_STORAGE_KEY = "ebara:locale";
 
 const en = {
+  "common.cancel": "Cancel",
+  "word.discardNote": "Discard your unsaved note changes?",
+  "guest.import": "Move this device’s words to my account",
+  "guest.imported": "Your device’s words are now saved in your account.",
+  "guest.importError": "Transfer could not finish. Your device’s words are safe; try again.",
+  "common.retry": "Try again",
+  "auth.sessionExpired": "Your session could not be verified. Please sign in again.",
+  "guest.storageError": "Your browser could not save your words. Free up storage or sign in before continuing.",
   "app.name": "EBARA",
 
   "auth.badge": "Private by default",
@@ -252,6 +260,14 @@ type Dictionary = Record<TranslationKey, string>;
  * always "مكتبتك" — never "مجموعتك" or a literal "صندوق".
  */
 const ar: Dictionary = {
+  "common.cancel": "إلغاء",
+  "word.discardNote": "تبي تغلق وتتجاهل تعديلات الملاحظة غير المحفوظة؟",
+  "common.retry": "حاول مرة ثانية",
+  "auth.sessionExpired": "تعذّر التحقق من جلستك. سجّل دخولك مرة ثانية.",
+  "guest.storageError": "المتصفح ما قدر يحفظ كلماتك. وفّر مساحة أو سجّل دخولك قبل المتابعة.",
+  "guest.import": "انقل كلمات هذا الجهاز إلى حسابي",
+  "guest.imported": "تم حفظ كلمات جهازك في حسابك.",
+  "guest.importError": "ما اكتمل النقل. كلمات جهازك محفوظة؛ حاول مرة ثانية.",
   "app.name": "EBARA",
 
   "auth.badge": "خصوصيتك أولاً",

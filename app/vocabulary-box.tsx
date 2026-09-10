@@ -269,6 +269,7 @@ export default function Ebara({
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [words, setWords] = useState<WordRecord[]>(demoMode ? DEMO_WORDS : []);
   const [isLoadingWords, setIsLoadingWords] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
   const [selectedWord, setSelectedWord] = useState<WordRecord | null>(null);
@@ -276,10 +277,45 @@ export default function Ebara({
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [pendingGuestWords, setPendingGuestWords] = useState<WordRecord[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+
+  function persistGuestWords(next: WordRecord[]) {
+    try {
+      window.localStorage.setItem(GUEST_WORDS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      throw new Error(t("guest.storageError"));
+    }
+  }
+
+  async function importGuestWords() {
+    if (!supabase || !session || isImporting) return;
+    setIsImporting(true);
+    try {
+      for (const entry of pendingGuestWords) {
+        // Never copy device identifiers or allow a local record to choose its owner.
+        const { error } = await supabase.from("words").insert({
+          user_id: session.user.id, word: entry.word, meaning_ar: entry.meaning_ar,
+          definition_en: entry.definition_en, definition_ar: entry.definition_ar,
+          pronunciation: entry.pronunciation, audio_url: entry.audio_url,
+          ipa: entry.ipa, part_of_speech: entry.part_of_speech,
+          example_sentence: entry.example_sentence, notes: entry.notes,
+        });
+        if (error && error.code !== "23505") throw error;
+      }
+      window.localStorage.removeItem(GUEST_WORDS_STORAGE_KEY);
+      setPendingGuestWords([]);
+      setToast(t("guest.imported"));
+      await loadWords();
+    } catch {
+      setToast(t("guest.importError"));
+    } finally { setIsImporting(false); }
+  }
 
   const loadWords = useCallback(async () => {
     if (!supabase || demoMode) return;
     setIsLoadingWords(true);
+    setLoadError(false);
     const { data, error } = await supabase
       .from("words")
       .select(
@@ -288,22 +324,31 @@ export default function Ebara({
       .order("created_at", { ascending: false });
 
     if (error) {
-      setToast(t("toast.loadError"));
+      setLoadError(true);
     } else {
       setWords((data ?? []) as WordRecord[]);
     }
     setIsLoadingWords(false);
-  }, [demoMode, supabase, t]);
+  }, [demoMode, supabase]);
 
   useEffect(() => {
     if (!supabase || demoMode) return;
 
     let active = true;
+    function restorePendingGuestWords() {
+      try {
+        const stored = JSON.parse(window.localStorage.getItem(GUEST_WORDS_STORAGE_KEY) ?? "[]");
+        if (Array.isArray(stored)) setPendingGuestWords(stored.filter((entry) =>
+          entry && typeof entry.word === "string" && typeof entry.meaning_ar === "string",
+        ));
+      } catch { setToast(t("guest.storageError")); }
+    }
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
       setSession(data.session);
       setAuthReady(true);
       if (data.session) {
+        restorePendingGuestWords();
         window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
         setGuestMode(false);
         void loadWords();
@@ -326,6 +371,7 @@ export default function Ebara({
       setAuthReady(true);
       if (event === "PASSWORD_RECOVERY") setAuthMode("update");
       if (nextSession && event === "SIGNED_IN") {
+        restorePendingGuestWords();
         window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
         setGuestMode(false);
         void loadWords();
@@ -336,12 +382,7 @@ export default function Ebara({
       active = false;
       subscription.unsubscribe();
     };
-  }, [demoMode, loadWords, supabase]);
-
-  useEffect(() => {
-    if (demoMode || session || !guestMode) return;
-    window.localStorage.setItem(GUEST_WORDS_STORAGE_KEY, JSON.stringify(words));
-  }, [demoMode, guestMode, session, words]);
+  }, [demoMode, loadWords, supabase, t]);
 
   useEffect(() => {
     if (!toast) return;
@@ -404,7 +445,7 @@ export default function Ebara({
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   function handleClearGuest() {
@@ -456,7 +497,8 @@ export default function Ebara({
     } catch {
       storedWords = [];
     }
-    window.localStorage.setItem(GUEST_ACTIVE_STORAGE_KEY, "true");
+    try { window.localStorage.setItem(GUEST_ACTIVE_STORAGE_KEY, "true"); }
+    catch { setToast(t("guest.storageError")); return; }
     setWords(storedWords);
     setGuestMode(true);
   }
@@ -479,7 +521,9 @@ export default function Ebara({
         user_id: guestMode ? "guest-user" : "demo-user",
         created_at: new Date().toISOString(),
       };
-      setWords((current) => [previewWord, ...current]);
+      const next = [previewWord, ...words];
+      if (guestMode) persistGuestWords(next);
+      setWords(next);
       setToast(t("toast.saved", { word: capitalize(previewWord.word) }));
       return;
     }
@@ -513,6 +557,7 @@ export default function Ebara({
 
   async function handleUpdateNotes(id: string, notes: string) {
     const trimmed = notes.trim();
+    if (guestMode) persistGuestWords(words.map((entry) => entry.id === id ? { ...entry, notes: trimmed } : entry));
 
     if (!demoMode && supabase && session) {
       const { error } = await supabase.from("words").update({ notes: trimmed }).eq("id", id);
@@ -530,6 +575,10 @@ export default function Ebara({
   async function handleDelete() {
     if (!wordToDelete) return;
     const target = wordToDelete;
+    if (guestMode) {
+      try { persistGuestWords(words.filter((entry) => entry.id !== target.id)); }
+      catch { setToast(t("guest.storageError")); return; }
+    }
 
     if (!demoMode && supabase && session) {
       const { error } = await supabase.from("words").delete().eq("id", target.id);
@@ -547,7 +596,7 @@ export default function Ebara({
 
   if (!authReady) return <LoadingScreen />;
 
-  if (!demoMode && !session && !guestMode) {
+  if (!demoMode && (authMode === "update" || (!session && !guestMode))) {
     return (
       <AuthScreen
         client={supabase}
@@ -612,6 +661,14 @@ export default function Ebara({
       </header>
 
       <section className="mx-auto max-w-[64rem] px-5 pb-28 pt-12 sm:px-8 sm:pt-16">
+        {session && pendingGuestWords.length > 0 && (
+          <div className="mb-6" role="status">
+            <button className="secondary-button" disabled={isImporting} onClick={() => void importGuestWords()}>
+              {isImporting && <LoaderCircle className="animate-spin" size={16} />}
+              {t("guest.import")} ({pendingGuestWords.length})
+            </button>
+          </div>
+        )}
         {/*
           The page opens on the collection itself rather than a title block.
           The heading names the section, the colophon captions it, and the two
@@ -669,7 +726,12 @@ export default function Ebara({
         )}
 
         <div className="list-panel mt-7">
-          {isLoadingWords ? (
+          {loadError ? (
+            <div role="alert" className="p-8 text-center">
+              <p>{t("toast.loadError")}</p>
+              <button className="primary-button mt-4" onClick={() => void loadWords()}>{t("common.retry")}</button>
+            </div>
+          ) : isLoadingWords ? (
             <WordGridSkeleton />
           ) : filteredWords.length ? (
             <ul className="glossary">
@@ -900,6 +962,8 @@ function AuthScreen({
         const { error: updateError } = await client.auth.updateUser({ password });
         if (updateError) throw updateError;
         setMessage(t("auth.passwordUpdated"));
+        window.history.replaceState(null, "", window.location.pathname);
+        onModeChange("login");
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("auth.errGeneric"));
@@ -1175,6 +1239,12 @@ function AddWordDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const lookupController = useRef<AbortController | null>(null);
+  useEffect(() => () => lookupController.current?.abort(), []);
+  function cancelLookup() {
+    lookupController.current?.abort();
+    setIsProcessing(false);
+  }
 
   const handleVoiceAlternatives = useCallback((alternatives: VoiceAlternative[]) => {
     setError(null);
@@ -1232,6 +1302,14 @@ function AddWordDialog({
 
     setError(null);
     setIsProcessing(true);
+    const controller = new AbortController();
+    lookupController.current?.abort();
+    lookupController.current = controller;
+    let timedOut = false;
+    const lookupTimeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 8000);
     try {
       let result: DictionaryEntry;
       if (demoMode) {
@@ -1240,6 +1318,7 @@ function AddWordDialog({
         setVocabularySuggestions([]);
       } else {
         const response = await fetch("/api/dictionary", {
+          signal: controller.signal,
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1270,15 +1349,19 @@ function AddWordDialog({
           if (apiCode === "RATE_LIMITED" || apiCode?.endsWith("_RATE_LIMITED")) {
             throw new Error(t("add.errRateLimited"));
           }
+          if (apiCode === "AUTH_INVALID" || apiCode === "AUTH_UNAVAILABLE") {
+            throw new Error(t("auth.sessionExpired"));
+          }
           if (apiCode?.startsWith("DICTIONARY_") || apiCode?.startsWith("WIKTIONARY_")) {
             throw new Error(t("add.errDictionaryUnavailable"));
           }
-          throw new Error(t("add.errNotFound"));
+          throw new Error(t("add.errDictionaryUnavailable"));
         }
         result = payload.data ?? payload;
         setVocabularySuggestions(payload.vocabulary_suggestions ?? []);
       }
 
+      if (controller.signal.aborted) return;
       const nextEntry = {
         ...result,
         example_sentence: options?.exampleSentence ?? result.example_sentence,
@@ -1287,9 +1370,13 @@ function AddWordDialog({
       setDictionaryEntry(nextEntry);
       setStep("review");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("add.errNotFound"));
+      if (controller.signal.aborted && !timedOut) return;
+      setError(timedOut || (caught instanceof DOMException && (caught.name === "TimeoutError" || caught.name === "AbortError"))
+        ? t("add.errDictionaryUnavailable")
+        : caught instanceof Error ? caught.message : t("add.errDictionaryUnavailable"));
     } finally {
-      setIsProcessing(false);
+      window.clearTimeout(lookupTimeout);
+      if (lookupController.current === controller) setIsProcessing(false);
     }
   }
 
@@ -1437,7 +1524,8 @@ function AddWordDialog({
 
           {error && <DialogError message={error} />}
 
-          <div className="mt-7 flex justify-end">
+          <div className="mt-7 flex justify-end gap-3">
+            {isProcessing && <button type="button" className="secondary-button" onClick={cancelLookup}>{t("common.cancel")}</button>}
             <button
               type="button"
               onClick={() => void lookupWord(draft)}

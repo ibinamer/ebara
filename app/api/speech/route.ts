@@ -1,4 +1,5 @@
 import { reserveAzureSpeechMilliseconds } from "../../../db/azure-speech-usage";
+import { sharedRequestLimit } from "../../../db/request-limits";
 
 export const runtime = "edge";
 
@@ -22,7 +23,8 @@ export async function GET(): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const rate = takeRateLimit(clientKey(request));
+  const rate = await sharedRequestLimit("speech", clientKey(request), RATE_LIMIT)
+    ?? takeRateLimit(clientKey(request));
   if (!rate.allowed) {
     return errorResponse("SPEECH_RATE_LIMITED", "Too many voice attempts.", 429, rate);
   }

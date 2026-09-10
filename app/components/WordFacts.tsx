@@ -33,9 +33,9 @@ export function WordFacts({
 
   return (
     <div className="flex flex-col gap-5">
-      {(entry.pronunciation || entry.ipa) && (
+      {entry.word && (
         <div className="flex flex-wrap items-baseline gap-x-10 gap-y-3">
-          {entry.pronunciation && (
+          {entry.word && (
             <div>
               <p className="detail-label">{t("word.pronunciation")}</p>
               <button
@@ -46,7 +46,7 @@ export function WordFacts({
               >
                 <Volume2 size={15} aria-hidden="true" />
                 <span dir="ltr" className="bidi-isolate">
-                  {entry.pronunciation}
+                  {entry.pronunciation || entry.word}
                 </span>
               </button>
             </div>

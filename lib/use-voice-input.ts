@@ -404,7 +404,11 @@ async function cloudSpeechAvailable(): Promise<boolean> {
       const payload = (await response.json()) as { available?: boolean };
       return payload.available === true;
     })
-    .catch(() => false);
+    .catch(() => false)
+    .then((available) => {
+      if (!available) cloudAvailabilityPromise = null;
+      return available;
+    });
   return cloudAvailabilityPromise;
 }
 

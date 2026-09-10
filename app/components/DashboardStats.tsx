@@ -20,7 +20,6 @@ export function DashboardStats({ stats }: { stats: CollectionStats }) {
   const items: { key: TranslationKey; value: number; hint?: TranslationKey }[] = [
     { key: "stats.total", value: stats.total },
     { key: "stats.week", value: stats.addedThisWeek },
-    { key: "stats.streak", value: stats.streakDays, hint: "stats.streakHint" },
   ];
 
   return (

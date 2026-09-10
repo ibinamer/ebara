@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 
 const projectRoot = new URL("../", import.meta.url);
+// Existing fallback fixtures explicitly exercise the optional legacy mode.
+process.env.ALLOW_LEGACY_TRANSLATION_FALLBACK = "true";
 
 async function render(pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -79,6 +82,27 @@ async function callSpeech(audio, bindings = {}) {
   );
 }
 
+function infrastructureStatement(query, values, state) {
+  state.cache ??= new Map();
+  state.counters ??= new Map();
+  if (/SELECT payload FROM dictionary_cache/.test(query)) {
+    const row = state.cache.get(values[0]);
+    return row && row.expires > values[1] ? { payload: row.payload } : null;
+  }
+  if (/INSERT INTO dictionary_cache/.test(query)) {
+    state.cache.set(values[0], { payload: values[1], expires: values[2] });
+    return { success: true };
+  }
+  if (/INSERT INTO request_limits/.test(query)) {
+    const count = state.counters.get(values[0]) ?? 0;
+    if (count >= values[2]) return null;
+    state.counters.set(values[0], count + 1);
+    return { count: count + 1 };
+  }
+  if (/CREATE TABLE IF NOT EXISTS (dictionary_cache|request_limits)|DELETE FROM (request_limits|dictionary_cache)/.test(query)) return { success: true };
+  return undefined;
+}
+
 function createUsageDatabase(initialCharacters = 0) {
   const state = {
     charactersUsed: initialCharacters,
@@ -95,10 +119,14 @@ function createUsageDatabase(initialCharacters = 0) {
           return this;
         },
         async run() {
+          const infra = infrastructureStatement(query, values, state);
+          if (infra !== undefined) return infra;
           assert.match(query, /CREATE TABLE IF NOT EXISTS azure_translation_usage/);
           return { success: true };
         },
         async first() {
+          const infra = infrastructureStatement(query, values, state);
+          if (infra !== undefined) return infra;
           if (/INSERT INTO azure_translation_usage/.test(query)) {
             const characters = Number(values[1]);
             if (state.charactersUsed + characters > 1_900_000) return null;
@@ -133,10 +161,14 @@ function createSpeechUsageDatabase(initialMilliseconds = 0) {
           return this;
         },
         async run() {
+          const infra = infrastructureStatement(query, values, state);
+          if (infra !== undefined) return infra;
           assert.match(query, /CREATE TABLE IF NOT EXISTS azure_speech_usage/);
           return { success: true };
         },
         async first() {
+          const infra = infrastructureStatement(query, values, state);
+          if (infra !== undefined) return infra;
           if (/INSERT INTO azure_speech_usage/.test(query)) {
             const milliseconds = Number(values[1]);
             if (state.millisecondsUsed + milliseconds > 16_200_000) return null;
@@ -317,7 +349,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(app, /apiCode === "DICTIONARY_NOT_FOUND"/);
   assert.match(route, /action", "expandtemplates"/);
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
-  assert.match(route, /\/__ebara-cache\/v3\/dictionary\//);
+  assert.match(route, /\/__ebara-cache\/v4\/dictionary\//);
   assert.match(route, /normalizeDictionaryAudioUrl/);
   assert.match(route, /audio_url/);
   assert.doesNotMatch(route, /translation\.googleapis\.com/);
@@ -864,6 +896,40 @@ test("saves a dictionary word when only the optional Arabic definition translati
     } else {
       process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
+  }
+});
+
+test("returns dictionary facts when an optional translation never responds", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.AZURE_TRANSLATOR_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
+  let aborted = false;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input);
+    if (url.hostname === "api.dictionaryapi.dev") return Response.json([{
+      word: "resilient", meanings: [{ partOfSpeech: "adjective", definitions: [{ definition: "Able to recover quickly." }] }],
+    }]);
+    if (url.hostname === "api.datamuse.com") return Response.json([]);
+    if (url.hostname === "en.wiktionary.org") return Response.json({ parse: { wikitext:
+      "==English==\n===Adjective===\n# Able to recover quickly.\n{{trans-top|recover quickly}}\n* Arabic: {{t|ar|مرن}}\n{{trans-bottom}}",
+    } });
+    return new Promise((resolve, reject) => {
+      init.signal.addEventListener("abort", () => { aborted = true; reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+    });
+  };
+  try {
+    const started = performance.now();
+    const response = await callDictionary("resilient");
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.meaning_ar, "مرن");
+    assert.equal(payload.data.definition_ar, "");
+    assert.ok(performance.now() - started < 2000, "optional work must finish before the whole-request deadline");
+    assert.ok(aborted, "cancel the upstream request rather than only hiding its result");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.AZURE_TRANSLATOR_KEY;
+    else process.env.AZURE_TRANSLATOR_KEY = originalKey;
   }
 });
 
@@ -1499,6 +1565,114 @@ test("uses translation coverage to prefer the broadly documented phrase sense", 
     } else {
       process.env.AZURE_TRANSLATOR_KEY = originalAzureKey;
     }
+  }
+});
+
+test("reads nested animal senses without expanding unrelated rare definitions", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.AZURE_TRANSLATOR_KEY;
+  delete process.env.AZURE_TRANSLATOR_KEY;
+  let expansionCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.dictionaryapi.dev") return Response.json({}, { status: 404 });
+    if (url.hostname === "api.datamuse.com") return Response.json([{ word: "cat", tags: ["n"] }]);
+    if (url.hostname === "en.wiktionary.org") {
+      if (url.searchParams.get("action") === "expandtemplates") expansionCalls++;
+      return Response.json({ parse: { wikitext: [
+        "==English==", "===Noun===",
+        "# {{non-gloss|Terms relating to animals.}}",
+        "## A [[domesticated#Adjective|domesticated]] [[feline#Noun]] kept as a [[housepet|house pet]].",
+        "## {{synonym of|en|itinerant worker}}.",
+        "====Translations====", "{{trans-top|domesticated feline house pet}}",
+        "* Arabic: {{t|ar|قطة}}", "{{trans-bottom}}",
+        "===Noun===", "# A [[strong]] [[tackle]] for a ship.",
+        "====Translations====", "{{trans-top|strong tackle ship}}",
+        "* Arabic: {{t|ar|رافعة}}", "* French: {{t|fr|palan}}", "* German: {{t|de|Flaschenzug}}", "{{trans-bottom}}",
+        "===Verb===", "# {{abbreviation of|en|catapult}}.",
+      ].join("\n") } });
+    }
+    return Response.json({}, { status: 429 });
+  };
+  try {
+    const response = await callDictionary("cat");
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.definition_en, "A domesticated feline kept as a house pet.");
+    assert.equal(payload.data.meaning_ar, "قطة");
+    assert.equal(expansionCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.AZURE_TRANSLATOR_KEY;
+    else process.env.AZURE_TRANSLATOR_KEY = originalKey;
+  }
+});
+
+test("serves durable sentence cache without contacting any provider", async () => {
+  const database = createUsageDatabase();
+  const data = {
+    word: "he is so handsome", meaning_ar: "إنه وسيم جدًا", definition_en: "",
+    definition_ar: "", pronunciation: "", audio_url: "", ipa: "",
+    part_of_speech: "sentence", example_sentence: "",
+  };
+  database.state.cache = new Map([["dictionary-v5:he is so handsome", {
+    payload: JSON.stringify(data), expires: Date.now() + 60000,
+  }]]);
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("No upstream allowed"); };
+  try {
+    const response = await callDictionary(data.word, { DB: database });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.cached, true);
+    assert.equal(payload.data.meaning_ar, data.meaning_ar);
+    assert.equal(calls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("limits repeated requests across worker instances using real SQLite counters", async () => {
+  const sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(await readFile(new URL("../drizzle/0003_dictionary_cache_and_request_limits.sql", import.meta.url), "utf8"));
+  const database = {
+    prepare(sql) {
+      const statement = sqlite.prepare(sql);
+      let values = [];
+      return {
+        bind(...next) { values = next; return this; },
+        async run() { return statement.run(...values); },
+        async first() { return statement.get(...values) ?? null; },
+      };
+    },
+  };
+  for (let index = 0; index < 20; index++) {
+    const response = await callDictionary("123", { DB: database });
+    assert.equal(response.status, 400);
+  }
+  const response = await callDictionary("123", { DB: database });
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("X-RateLimit-Remaining"), "0");
+  sqlite.close();
+});
+
+test("does not send text to the unreviewed fallback unless explicitly enabled", async () => {
+  const fetchBefore = globalThis.fetch;
+  const keyBefore = process.env.AZURE_TRANSLATOR_KEY;
+  const legacyBefore = process.env.ALLOW_LEGACY_TRANSLATION_FALLBACK;
+  delete process.env.AZURE_TRANSLATOR_KEY;
+  delete process.env.ALLOW_LEGACY_TRANSLATION_FALLBACK;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("No provider configured"); };
+  try {
+    const response = await callDictionary("I am ready today");
+    assert.equal(response.status, 503);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = fetchBefore;
+    if (keyBefore === undefined) delete process.env.AZURE_TRANSLATOR_KEY;
+    else process.env.AZURE_TRANSLATOR_KEY = keyBefore;
+    if (legacyBefore === undefined) delete process.env.ALLOW_LEGACY_TRANSLATION_FALLBACK;
+    else process.env.ALLOW_LEGACY_TRANSLATION_FALLBACK = legacyBefore;
   }
 });
 

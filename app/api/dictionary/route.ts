@@ -1,3 +1,6 @@
+import { readDictionaryCache, writeDictionaryCache } from "../../../db/dictionary-cache";
+import { sharedRequestLimit } from "../../../db/request-limits";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   AZURE_TRANSLATION_HARD_LIMIT_CHARACTERS,
   AZURE_TRANSLATION_WARNING_CHARACTERS,
@@ -18,9 +21,9 @@ const MYMEMORY_API_URL = "https://api.mymemory.translated.net/get";
 const MAX_BODY_BYTES = 2_048;
 const MAX_WORD_LENGTH = 80;
 const MAX_UPSTREAM_BYTES = 1_500_000;
-const REQUEST_TIMEOUT_MS = 8_000;
+const REQUEST_TIMEOUT_MS = 1_500;
 const METADATA_TIMEOUT_MS = 2_500;
-const AUTH_TIMEOUT_MS = 8_000;
+const AUTH_TIMEOUT_MS = 3_000;
 // Every outbound call below is a single-shot request to a third-party service
 // EBARA does not control. A transient blip there (a 5xx, a dropped
 // connection, a slow response) used to fail the whole lookup outright, which
@@ -33,6 +36,10 @@ const RETRY_DELAY_MS = 350;
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
 const MAX_RATE_BUCKETS = 2_000;
+const LOOKUP_TIMEOUT_MS = 6_000;
+const ENRICHMENT_TIMEOUT_MS = 1_600;
+const OPTIONAL_TRANSLATION_TIMEOUT_MS = 900;
+const CACHE_TIMEOUT_MS = 200;
 const SHARED_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 const MAX_INPUT_LENGTH = 160;
@@ -251,9 +258,64 @@ type AzureTranslatorCredentials = {
 };
 
 const rateBuckets = new Map<string, RateBucket>();
+const lookupBudget = new AsyncLocalStorage<{ deadline: number; signal: AbortSignal }>();
 
 export async function POST(request: Request): Promise<Response> {
-  const rate = consumeRateLimit(clientKey(request), Date.now());
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<Response>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(Response.json({ ok: false, error: {
+        code: "DICTIONARY_TIMEOUT", message: "The lookup took too long. Please try again.",
+      } }, { status: 504, headers: { "Cache-Control": "no-store" } }));
+    }, LOOKUP_TIMEOUT_MS);
+  });
+  try {
+    const response = await Promise.race([
+      lookupBudget.run({ deadline: startedAt + LOOKUP_TIMEOUT_MS, signal: controller.signal }, () => processLookup(request)),
+      timeout,
+    ]);
+    const headers = new Headers(response.headers);
+    headers.set("X-Request-ID", requestId);
+    headers.set("Server-Timing", `lookup;dur=${Date.now() - startedAt}`);
+    console.info("dictionary_request", { requestId, status: response.status, durationMs: Date.now() - startedAt });
+    return new Response(response.body, { status: response.status, headers });
+  } finally { clearTimeout(timer); }
+}
+
+/** Optional work must never consume the remaining time needed to return a word. */
+async function withinLookupBudget<T>(
+  milliseconds: number,
+  work: () => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  const parent = lookupBudget.getStore();
+  const remaining = parent ? parent.deadline - Date.now() - 100 : milliseconds;
+  const duration = Math.min(milliseconds, remaining);
+  if (duration <= 0 || parent?.signal.aborted) return fallback;
+  const controller = new AbortController();
+  const signal = parent
+    ? AbortSignal.any([controller.signal, parent.signal]) : controller.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => { controller.abort(); resolve(fallback); }, duration);
+  });
+  try {
+    return await Promise.race([
+      lookupBudget.run({ deadline: Date.now() + duration, signal }, work), timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+async function processLookup(request: Request): Promise<Response> {
+  const rate = await sharedRequestLimit("dictionary", clientKey(request), RATE_LIMIT)
+    ?? consumeRateLimit(clientKey(request), Date.now());
   if (!rate.allowed) {
     const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1_000));
     return errorResponse(
@@ -366,7 +428,8 @@ export async function POST(request: Request): Promise<Response> {
   // Completed dictionary records contain no user data, so they can be shared
   // safely across accounts. This avoids paying for or waiting on the same
   // provider lookup again when another learner saves the same word.
-  const sharedCached = await findSharedDictionaryEntry(request, input.cacheKey);
+  const sharedCached = await withinLookupBudget(CACHE_TIMEOUT_MS,
+    () => findSharedDictionaryEntry(request, input.cacheKey), null);
   if (sharedCached) {
     return Response.json(
       { ok: true as const, cached: true, data: sharedCached },
@@ -457,46 +520,55 @@ export async function POST(request: Request): Promise<Response> {
     englishData = { ...englishData, part_of_speech: "phrase" };
   }
 
-  // meaning_ar is a short headword-level gloss, not a translated sentence.
-  // Azure Dictionary Lookup is sense-aware and returns part-of-speech tags, so
-  // it is tried first when configured. Wiktionary remains the curated fallback.
-  const azureCredentials = getAzureTranslatorCredentials();
-  const azureDictionaryMeaning = azureCredentials
-    ? await fetchAzureDictionaryMeaning(
+  const missingMeaning = lookupFailure(
+    "ARABIC_MEANING_NOT_FOUND", "Arabic translation is temporarily unavailable.", 503,
+  );
+  const meaningDecision = await withinLookupBudget(
+    ENRICHMENT_TIMEOUT_MS,
+    async (): Promise<LookupDecision<string>> => {
+      // meaning_ar is a short headword-level gloss, not a translated sentence.
+      // Azure Dictionary Lookup is sense-aware and returns part-of-speech tags, so
+      // it is tried first when configured. Wiktionary remains the curated fallback.
+      const azureCredentials = getAzureTranslatorCredentials();
+      const azureDictionaryMeaning = azureCredentials
+        ? await fetchAzureDictionaryMeaning(
+            englishData.word,
+            englishData.part_of_speech,
+            azureCredentials,
+          )
+        : null;
+      let meaningAr = azureDictionaryMeaning?.ok
+        ? azureDictionaryMeaning.data
+        : mainWikitext.ok
+          ? findArabicMeaning(mainWikitext.data, englishData.definition_en)
+          : null;
+
+      if (!meaningAr) {
+        // Large Wiktionary entries sometimes move translation tables to a
+        // dedicated subpage. This is still a direct dictionary lookup, not
+        // machine translation.
+        const translationSubpage = await fetchWiktionaryWikitext(`${englishData.word}/translations`);
+        if (translationSubpage.ok) {
+          meaningAr = findArabicMeaning(translationSubpage.data, englishData.definition_en);
+        }
+      }
+
+      // Keep meaning_ar as a short lookup gloss. Phrases are translated as the
+      // phrase itself; their selected, sense-aware dictionary definition is
+      // translated separately into definition_ar below. This prevents a complete
+      // explanatory sentence from leaking into the compact meaning field.
+      const meaningLookupText = translationHeadwordContext(
         englishData.word,
         englishData.part_of_speech,
-        azureCredentials,
-      )
-    : null;
-  let meaningAr = azureDictionaryMeaning?.ok
-    ? azureDictionaryMeaning.data
-    : mainWikitext.ok
-      ? findArabicMeaning(mainWikitext.data, englishData.definition_en)
-      : null;
+      );
+      const shortMeaningPromise = meaningAr
+        ? Promise.resolve<LookupDecision<string>>({ ok: true, data: meaningAr })
+        : translateToArabic(meaningLookupText);
 
-  if (!meaningAr) {
-    // Large Wiktionary entries sometimes move translation tables to a
-    // dedicated subpage. This is still a direct dictionary lookup, not
-    // machine translation.
-    const translationSubpage = await fetchWiktionaryWikitext(`${englishData.word}/translations`);
-    if (translationSubpage.ok) {
-      meaningAr = findArabicMeaning(translationSubpage.data, englishData.definition_en);
-    }
-  }
-
-  // Keep meaning_ar as a short lookup gloss. Phrases are translated as the
-  // phrase itself; their selected, sense-aware dictionary definition is
-  // translated separately into definition_ar below. This prevents a complete
-  // explanatory sentence from leaking into the compact meaning field.
-  const meaningLookupText = translationHeadwordContext(
-    englishData.word,
-    englishData.part_of_speech,
+      return await shortMeaningPromise;
+    },
+    missingMeaning,
   );
-  const shortMeaningPromise = meaningAr
-    ? Promise.resolve<LookupDecision<string>>({ ok: true, data: meaningAr })
-    : translateToArabic(meaningLookupText);
-
-  const meaningDecision = await shortMeaningPromise;
   const needsArabicMeaning = !meaningDecision.ok;
 
   // Do not discard valid English dictionary data just because every automatic
@@ -511,7 +583,8 @@ export async function POST(request: Request): Promise<Response> {
   // translation provider must not make the whole word impossible to save.
   const definitionDecision = needsArabicMeaning
     ? null
-    : await translateToArabic(englishData.definition_en);
+    : await withinLookupBudget(OPTIONAL_TRANSLATION_TIMEOUT_MS,
+        () => translateToArabic(englishData.definition_en), missingMeaning);
   const data: DictionaryResult = {
     ...englishData,
     meaning_ar: meaningDecision.ok ? meaningDecision.data : "",
@@ -525,7 +598,8 @@ export async function POST(request: Request): Promise<Response> {
   // Only complete automatic records are shared. Any manual gloss belongs to
   // the learner who entered it and is saved in that learner's own collection.
   if (!needsArabicMeaning) {
-    await storeSharedDictionaryEntry(request, input.cacheKey, data);
+    await withinLookupBudget(CACHE_TIMEOUT_MS,
+      () => storeSharedDictionaryEntry(request, input.cacheKey, data), undefined);
   }
 
   return Response.json(
@@ -541,14 +615,15 @@ export async function POST(request: Request): Promise<Response> {
   );
 }
 
-/** Uses the official Azure service when configured, then a free fallback. */
+/** Only use the unreviewed legacy translation feed when explicitly configured. */
 async function translateToArabic(text: string): Promise<LookupDecision<string>> {
   const credentials = getAzureTranslatorCredentials();
   if (credentials) {
     const azure = await fetchAzureArabicTranslation(text, credentials);
     if (azure.ok) return azure;
   }
-  return fetchArabicTranslation(text);
+  if (getRuntimeString("ALLOW_LEGACY_TRANSLATION_FALLBACK") === "true") return fetchArabicTranslation(text);
+  return lookupFailure("ARABIC_MEANING_NOT_FOUND", "Arabic translation is temporarily unavailable.", 503);
 }
 
 function getAzureTranslatorCredentials(): AzureTranslatorCredentials | null {
@@ -849,7 +924,7 @@ function sharedDictionaryCacheKey(request: Request, word: string): Request | nul
     const url = new URL(request.url);
     // Version the shared cache whenever provider selection or meaning quality
     // changes so older fallback translations cannot survive for 30 days.
-    url.pathname = `/__ebara-cache/v3/dictionary/${encodeURIComponent(word)}`;
+    url.pathname = `/__ebara-cache/v4/dictionary/${encodeURIComponent(word)}`;
     url.search = "";
     url.hash = "";
     return new Request(url, { method: "GET" });
@@ -862,6 +937,11 @@ async function findSharedDictionaryEntry(
   request: Request,
   word: string,
 ): Promise<DictionaryResult | null> {
+  const durable = await readDictionaryCache(word);
+  if (durable) {
+    const parsed = parseCachedDictionaryResult(durable);
+    if (parsed) return parsed;
+  }
   const cache = sharedDictionaryCache();
   const key = sharedDictionaryCacheKey(request, word);
   if (!cache || !key) return null;
@@ -881,6 +961,7 @@ async function storeSharedDictionaryEntry(
   word: string,
   data: DictionaryResult,
 ): Promise<void> {
+  await writeDictionaryCache(word, data);
   const cache = sharedDictionaryCache();
   const key = sharedDictionaryCacheKey(request, word);
   if (!cache || !key) return;
@@ -948,7 +1029,9 @@ async function findCachedWord(
         apikey: auth.supabaseApiKey,
         Authorization: `Bearer ${auth.token}`,
       },
-      signal: controller.signal,
+      signal: lookupBudget.getStore()
+        ? AbortSignal.any([controller.signal, lookupBudget.getStore()!.signal])
+        : controller.signal,
     });
   } catch (error) {
     return isAbortError(error)
@@ -1150,6 +1233,13 @@ async function translationOnlyResponse(
   rate: RateDecision,
   kind: "expression" | "sentence",
 ): Promise<Response> {
+  const cached = parseCachedDictionaryResult(await withinLookupBudget(
+    CACHE_TIMEOUT_MS, () => readDictionaryCache(input.cacheKey), null));
+  if (cached) return Response.json({
+    ok: true, cached: true, entry_kind: kind,
+    vocabulary_suggestions: vocabularySuggestions(input.display),
+    needs_arabic_meaning: false, data: cached,
+  }, { headers: responseHeaders(rate) });
   const translation = await translateToArabic(input.display);
   if (!translation.ok) return lookupErrorResponse(translation, rate);
 
@@ -1164,6 +1254,9 @@ async function translationOnlyResponse(
     part_of_speech: kind,
     example_sentence: "",
   };
+
+  await withinLookupBudget(CACHE_TIMEOUT_MS,
+    () => writeDictionaryCache(input.cacheKey, data), undefined);
 
   return Response.json(
     {
@@ -1338,7 +1431,9 @@ async function fetchPopularPartsOfSpeech(word: string): Promise<string[]> {
     const response = await fetch(url, {
       method: "GET",
       headers: { Accept: "application/json" },
-      signal: controller.signal,
+      signal: lookupBudget.getStore()
+        ? AbortSignal.any([controller.signal, lookupBudget.getStore()!.signal])
+        : controller.signal,
     });
     if (!response.ok) return [];
 
@@ -1374,7 +1469,9 @@ async function fetchSpellingSuggestions(word: string): Promise<string[]> {
     const response = await fetch(url, {
       method: "GET",
       headers: { Accept: "application/json" },
-      signal: controller.signal,
+      signal: lookupBudget.getStore()
+        ? AbortSignal.any([controller.signal, lookupBudget.getStore()!.signal])
+        : controller.signal,
     });
     if (!response.ok) return [];
 
@@ -1823,22 +1920,29 @@ async function parseWiktionaryDefinition(
     order: number;
     partOfSpeech: string;
     sectionOrder: number;
+    groupOrder: number;
   }> = [];
 
   for (const [sectionOrder, rankedSection] of rankedSections.entries()) {
+    if (candidates.length > 0) break;
     const lines = rankedSection.body.split(/\r?\n/u);
+    const groupedSenses = lines.some((value) => /^##+[^#*:]/u.test(value));
+    let groupOrder = 0;
 
     for (let line = 0; line < lines.length; line += 1) {
-      // Senses are `# ...`; `#*`, `#:` and `##` are citations and sub-senses.
-      if (!/^#[^#*:]/u.test(lines[line] ?? "")) continue;
+      // Nested numbered lines are real senses; only citations/examples are excluded.
+      if (!/^#+[^#*:]/u.test(lines[line] ?? "")) continue;
 
-      const rawDefinition = (lines[line] ?? "").replace(/^#\s*/u, "");
+      if (groupedSenses && /^#[^#*:]/u.test(lines[line] ?? "")) groupOrder = line;
+      const rawDefinition = (lines[line] ?? "").replace(/^#+\s*/u, "");
+      // Group headings (e.g. cat's "Terms relating to animals") are not meanings.
+      if (groupedSenses && /\{\{non-gloss\|/u.test(rawDefinition)) continue;
       let definition = cleanWikitextText(rawDefinition, 1_500);
 
       // Template-only senses are valid definitions, not empty lines. Ask the
       // official MediaWiki expander to render them instead of maintaining an
       // incomplete, ever-growing list of Wiktionary templates in EBARA.
-      if (!isMeaningfulDefinition(definition) && rawDefinition.includes("{{")) {
+      if (!isMeaningfulDefinition(definition) && rawDefinition.includes("{{") && candidates.length === 0) {
         const expanded = await expandWiktionaryDefinition(term, rawDefinition);
         if (expanded.ok) {
           definition = cleanWikitextText(expanded.data, 1_500);
@@ -1870,6 +1974,7 @@ async function parseWiktionaryDefinition(
         order: line,
         partOfSpeech: rankedSection.partOfSpeech,
         sectionOrder,
+        groupOrder,
       });
     }
   }
@@ -1877,6 +1982,7 @@ async function parseWiktionaryDefinition(
   const best = candidates.sort(
     (left, right) =>
       left.sectionOrder - right.sectionOrder ||
+      left.groupOrder - right.groupOrder ||
       right.languageCount - left.languageCount ||
       right.matchScore - left.matchScore ||
       left.order - right.order,
@@ -2016,8 +2122,9 @@ function cleanArabicTerm(value: string): string | null {
 
 function cleanWikitextText(value: string, maxLength: number): string | null {
   const cleaned = value
+    .replace(/\{\{taxfmt\|([^|{}]+)(?:\|[^{}]*)?\}\}/gu, "$1")
     .replace(/\{\{[^{}]*\}\}/gu, " ")
-    .replace(/\[\[(?:[^\]|]+\|)?([^\]]+)\]\]/gu, "$1")
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/gu, (_match, target: string, label: string | undefined) => label ?? target.split("#")[0])
     .replace(/<[^>]+>/gu, " ")
     .replace(/'{2,}/gu, "")
     .replace(/\s+/gu, " ")
@@ -2247,7 +2354,9 @@ async function authenticateSupabaseRequest(
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
-      signal: controller.signal,
+      signal: lookupBudget.getStore()
+        ? AbortSignal.any([controller.signal, lookupBudget.getStore()!.signal])
+        : controller.signal,
     });
 
     if (response.status === 401 || response.status === 403) {
@@ -2444,11 +2553,14 @@ async function fetchWithRetry(
   let last: FetchAttempt = { ok: false, timedOut: false };
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const budget = lookupBudget.getStore();
+    if (budget?.signal.aborted || (budget && Date.now() >= budget.deadline)) return { ok: false, timedOut: true };
     if (beforeAttempt && !(await beforeAttempt())) return last;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, { ...init, signal: controller.signal });
+      const response = await fetch(url, { ...init, signal: budget
+        ? AbortSignal.any([controller.signal, budget.signal]) : controller.signal });
       if (response.status >= 500 && attempt < attempts) {
         await sleep(RETRY_DELAY_MS);
         continue;
