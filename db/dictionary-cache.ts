@@ -1,6 +1,6 @@
 import { getRuntimeD1Database } from "../lib/runtime-bindings";
 
-const VERSION = "dictionary-v5";
+const VERSION = "dictionary-v6";
 export async function readDictionaryCache(word: string): Promise<unknown | null> {
   try {
     const db = getRuntimeD1Database();

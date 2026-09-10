@@ -37,8 +37,8 @@ const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
 const MAX_RATE_BUCKETS = 2_000;
 const LOOKUP_TIMEOUT_MS = 6_000;
-const ENRICHMENT_TIMEOUT_MS = 1_600;
-const OPTIONAL_TRANSLATION_TIMEOUT_MS = 900;
+const ENRICHMENT_TIMEOUT_MS = 2_600;
+const OPTIONAL_TRANSLATION_TIMEOUT_MS = 1_400;
 const CACHE_TIMEOUT_MS = 200;
 const SHARED_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
@@ -523,51 +523,43 @@ async function processLookup(request: Request): Promise<Response> {
   const missingMeaning = lookupFailure(
     "ARABIC_MEANING_NOT_FOUND", "Arabic translation is temporarily unavailable.", 503,
   );
+  const curatedMeaning = mainWikitext.ok
+    ? findArabicMeaning(mainWikitext.data, englishData.definition_en) : null;
+  const fallbackMeaning: LookupDecision<string> = curatedMeaning
+    ? { ok: true, data: curatedMeaning } : missingMeaning;
+  // The definition translation is independent of the short gloss.
+  const definitionPromise = withinLookupBudget(OPTIONAL_TRANSLATION_TIMEOUT_MS,
+    () => translateToArabic(englishData.definition_en), missingMeaning);
   const meaningDecision = await withinLookupBudget(
     ENRICHMENT_TIMEOUT_MS,
     async (): Promise<LookupDecision<string>> => {
-      // meaning_ar is a short headword-level gloss, not a translated sentence.
-      // Azure Dictionary Lookup is sense-aware and returns part-of-speech tags, so
-      // it is tried first when configured. Wiktionary remains the curated fallback.
-      const azureCredentials = getAzureTranslatorCredentials();
-      const azureDictionaryMeaning = azureCredentials
-        ? await fetchAzureDictionaryMeaning(
-            englishData.word,
-            englishData.part_of_speech,
-            azureCredentials,
-          )
-        : null;
-      let meaningAr = azureDictionaryMeaning?.ok
-        ? azureDictionaryMeaning.data
-        : mainWikitext.ok
-          ? findArabicMeaning(mainWikitext.data, englishData.definition_en)
-          : null;
-
-      if (!meaningAr) {
-        // Large Wiktionary entries sometimes move translation tables to a
-        // dedicated subpage. This is still a direct dictionary lookup, not
-        // machine translation.
-        const translationSubpage = await fetchWiktionaryWikitext(`${englishData.word}/translations`);
-        if (translationSubpage.ok) {
-          meaningAr = findArabicMeaning(translationSubpage.data, englishData.definition_en);
-        }
+      const credentials = getAzureTranslatorCredentials();
+      if (credentials) {
+        const dictionary = await withinLookupBudget(700,
+          () => fetchAzureDictionaryMeaning(englishData.word, englishData.part_of_speech, credentials),
+          missingMeaning);
+        if (dictionary.ok) return dictionary;
       }
+      if (curatedMeaning) return { ok: true, data: curatedMeaning };
 
-      // Keep meaning_ar as a short lookup gloss. Phrases are translated as the
-      // phrase itself; their selected, sense-aware dictionary definition is
-      // translated separately into definition_ar below. This prevents a complete
-      // explanatory sentence from leaking into the compact meaning field.
-      const meaningLookupText = translationHeadwordContext(
-        englishData.word,
-        englishData.part_of_speech,
-      );
-      const shortMeaningPromise = meaningAr
-        ? Promise.resolve<LookupDecision<string>>({ ok: true, data: meaningAr })
-        : translateToArabic(meaningLookupText);
-
-      return await shortMeaningPromise;
+      // A missing translation subpage must not consume the translator's time.
+      // Resolve either source successfully; failures alone never win the race.
+      const candidates = [
+        translateToArabic(translationHeadwordContext(englishData.word, englishData.part_of_speech)),
+        fetchWiktionaryWikitext(`${englishData.word}/translations`).then((page): LookupDecision<string> => {
+          const meaning = page.ok ? findArabicMeaning(page.data, englishData.definition_en) : null;
+          return meaning ? { ok: true, data: meaning } : missingMeaning;
+        }),
+      ];
+      try {
+        return await Promise.any(candidates.map(async (candidate) => {
+          const result = await candidate;
+          if (!result.ok) throw result;
+          return result;
+        }));
+      } catch { return missingMeaning; }
     },
-    missingMeaning,
+    fallbackMeaning,
   );
   const needsArabicMeaning = !meaningDecision.ok;
 
@@ -581,10 +573,7 @@ async function processLookup(request: Request): Promise<Response> {
   // The English definition and short Arabic meaning are the core record. A
   // full Arabic rendering of the definition is useful, but an outage at a
   // translation provider must not make the whole word impossible to save.
-  const definitionDecision = needsArabicMeaning
-    ? null
-    : await withinLookupBudget(OPTIONAL_TRANSLATION_TIMEOUT_MS,
-        () => translateToArabic(englishData.definition_en), missingMeaning);
+  const definitionDecision = await definitionPromise;
   const data: DictionaryResult = {
     ...englishData,
     meaning_ar: meaningDecision.ok ? meaningDecision.data : "",
@@ -924,7 +913,7 @@ function sharedDictionaryCacheKey(request: Request, word: string): Request | nul
     const url = new URL(request.url);
     // Version the shared cache whenever provider selection or meaning quality
     // changes so older fallback translations cannot survive for 30 days.
-    url.pathname = `/__ebara-cache/v4/dictionary/${encodeURIComponent(word)}`;
+    url.pathname = `/__ebara-cache/v5/dictionary/${encodeURIComponent(word)}`;
     url.search = "";
     url.hash = "";
     return new Request(url, { method: "GET" });
@@ -1280,6 +1269,8 @@ async function fetchEnglishDictionary(
     url,
     { method: "GET", headers: { Accept: "application/json" } },
     REQUEST_TIMEOUT_MS,
+    undefined,
+    1,
   );
 
   if (!attempt.ok) {

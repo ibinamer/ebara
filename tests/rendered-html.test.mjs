@@ -349,7 +349,7 @@ test("keeps auth, private persistence, and dictionary lookup in the product sour
   assert.match(app, /apiCode === "DICTIONARY_NOT_FOUND"/);
   assert.match(route, /action", "expandtemplates"/);
   assert.match(route, /SHARED_CACHE_MAX_AGE_SECONDS/);
-  assert.match(route, /\/__ebara-cache\/v4\/dictionary\//);
+  assert.match(route, /\/__ebara-cache\/v5\/dictionary\//);
   assert.match(route, /normalizeDictionaryAudioUrl/);
   assert.match(route, /audio_url/);
   assert.doesNotMatch(route, /translation\.googleapis\.com/);
@@ -695,11 +695,11 @@ test("selects Azure dictionary meanings by part of speech and meters every attem
     assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.data.meaning_ar, "مِقياس");
     assert.equal(payload.data.definition_ar, "جهاز يستخدم لقياس شيء ما.");
-    assert.deepEqual(azureInputs, [
+    assert.deepEqual([...azureInputs].sort(), [
       "meter",
       "meter",
       "A device used to measure something.",
-    ]);
+    ].sort());
     assert.equal(
       database.state.charactersUsed,
       1_799_990 + azureInputs.reduce((total, value) => total + Array.from(value).length, 0),
@@ -926,6 +926,45 @@ test("returns dictionary facts when an optional translation never responds", asy
     assert.equal(payload.data.definition_ar, "");
     assert.ok(performance.now() - started < 2000, "optional work must finish before the whole-request deadline");
     assert.ok(aborted, "cancel the upstream request rather than only hiding its result");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.AZURE_TRANSLATOR_KEY;
+    else process.env.AZURE_TRANSLATOR_KEY = originalKey;
+  }
+});
+
+test("translates the short meaning while a Wiktionary subpage stalls", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.AZURE_TRANSLATOR_KEY;
+  process.env.AZURE_TRANSLATOR_KEY = "test-key";
+  let subpageAborted = false;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input);
+    if (url.hostname === "api.dictionaryapi.dev") return Response.json([{
+      word: "resilient", meanings: [{ partOfSpeech: "adjective", definitions: [{ definition: "Able to recover quickly." }] }],
+    }]);
+    if (url.hostname === "api.datamuse.com") return Response.json([]);
+    if (url.hostname === "en.wiktionary.org") {
+      if ((url.searchParams.get("page") || "").endsWith("/translations")) {
+        return new Promise((resolve, reject) => {
+          init.signal.addEventListener("abort", () => { subpageAborted = true; reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+        });
+      }
+      return Response.json({ parse: { wikitext: "==English==\n===Adjective===\n# Able to recover quickly." } });
+    }
+    if (url.pathname.includes("dictionary/lookup")) return Response.json([{ translations: [] }]);
+    if (url.pathname.endsWith("/translate")) return Response.json([{ translations: [{ text: "مرن", to: "ar" }] }]);
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  try {
+    const started = performance.now();
+    const response = await callDictionary("resilient", { DB: createUsageDatabase() });
+    const payload = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(payload));
+    assert.equal(payload.needs_arabic_meaning, false);
+    assert.equal(payload.data.meaning_ar, "مرن");
+    assert.ok(performance.now() - started < 1000, "stalled subpage must not delay the translator");
+    assert.ok(subpageAborted, "cancel the losing source");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) delete process.env.AZURE_TRANSLATOR_KEY;
@@ -1364,11 +1403,11 @@ test("keeps an Azure phrase meaning short and translates its definition separate
     assert.equal(response.status, 200, JSON.stringify(payload));
     assert.equal(payload.data.meaning_ar, "الرجل الكبير");
     assert.equal(payload.data.definition_ar, "مصطلح محبة يوجّه عادةً إلى رجل طيب.");
-    assert.deepEqual(azureInputs, [
+    assert.deepEqual([...azureInputs].sort(), [
       "big guy",
       "big guy",
       "A term of endearment, usually addressed toward an all-around good male person.",
-    ]);
+    ].sort());
   } finally {
     globalThis.fetch = originalFetch;
     if (originalAzureKey === undefined) {
@@ -1414,7 +1453,7 @@ test("translates an obvious short sentence directly and suggests its useful word
     assert.equal(payload.data.meaning_ar, "إنه وسيم جدًا");
     assert.equal(payload.data.definition_en, "");
     assert.equal(payload.data.part_of_speech, "sentence");
-    assert.deepEqual(azureInputs, ["He is so handsome"]);
+    assert.deepEqual([...azureInputs].sort(), ["He is so handsome"]);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalAzureKey === undefined) {
@@ -1615,7 +1654,7 @@ test("serves durable sentence cache without contacting any provider", async () =
     definition_ar: "", pronunciation: "", audio_url: "", ipa: "",
     part_of_speech: "sentence", example_sentence: "",
   };
-  database.state.cache = new Map([["dictionary-v5:he is so handsome", {
+  database.state.cache = new Map([["dictionary-v6:he is so handsome", {
     payload: JSON.stringify(data), expires: Date.now() + 60000,
   }]]);
   const originalFetch = globalThis.fetch;
