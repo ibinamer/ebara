@@ -569,6 +569,8 @@ body {
   display: grid;
   width: 2.25rem;
   height: 2.25rem;
+  min-width: 44px;
+  min-height: 44px;
   flex: 0 0 auto;
   place-items: center;
   border: 0;
@@ -635,6 +637,14 @@ body {
 .field-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--ring);
+}
+
+.field-hint {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 /*
@@ -712,6 +722,28 @@ body {
   color: var(--text-faint);
   font-weight: 400;
   letter-spacing: 0;
+}
+
+.manual-meaning-input {
+  width: 100%;
+  min-height: 3.5rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-control);
+  outline: 0;
+  background: var(--surface);
+  padding: 0.85rem 1rem;
+  color: var(--text);
+  font-size: 1.125rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.manual-meaning-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--ring);
+}
+
+.manual-meaning-input::placeholder {
+  color: var(--text-faint);
 }
 
 .voice-button {
@@ -797,8 +829,9 @@ body {
 /* Suggestions in the add flow: a small pill token, matching macOS's own
    token-field chip shape. */
 .chip {
+  min-width: 44px;
   display: inline-flex;
-  min-height: 2rem;
+  min-height: 44px;
   align-items: center;
   gap: 0.4rem;
   border: 1px solid var(--rule-strong);
@@ -847,6 +880,48 @@ body {
 
 .badge-accent {
   color: var(--accent-text);
+}
+
+/* A compact identity signature: personal and easy to spot, while keeping the
+   toolbar calm and free of account-dashboard furniture. */
+.account-signature {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(13rem, 42vw);
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 0.22rem 0.65rem 0.22rem 0.25rem;
+  box-shadow: var(--shadow-control);
+}
+
+:root[dir="rtl"] .account-signature {
+  padding: 0.22rem 0.25rem 0.22rem 0.65rem;
+}
+
+.account-avatar {
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.account-display-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .segmented {
@@ -1132,7 +1207,7 @@ body {
   overflow-y: auto;
   border: 1px solid var(--material-border);
   border-radius: var(--radius-sheet);
-  background: var(--material-bg);
+  background: var(--surface);
   -webkit-backdrop-filter: blur(28px) saturate(180%);
   backdrop-filter: blur(28px) saturate(180%);
   padding: clamp(1.4rem, 3.5vw, 2.25rem);
@@ -1156,6 +1231,30 @@ body {
 
 .settings-dialog {
   max-width: 30rem;
+}
+
+.account-settings-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-2);
+  padding: 1rem;
+}
+
+.account-email-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.account-email-row > :last-child {
+  color: var(--text-muted);
 }
 
 .confirm-dialog {

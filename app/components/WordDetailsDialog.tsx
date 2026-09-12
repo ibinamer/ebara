@@ -19,9 +19,13 @@ export function WordDetailsDialog({
   onSaveNotes: (notes: string) => Promise<void>;
 }) {
   const { t, locale } = useI18n();
+  const [dirty, setDirty] = useState(false);
+  function requestClose() {
+    if (!dirty || window.confirm(t("word.discardNote"))) onClose();
+  }
 
   return (
-    <Dialog onClose={onClose} labelledBy="word-title" className="details-dialog">
+    <Dialog onClose={requestClose} labelledBy="word-title" className="details-dialog">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="detail-label mb-3">
@@ -34,7 +38,7 @@ export function WordDetailsDialog({
             partOfSpeech={entry.part_of_speech}
           />
         </div>
-        <DialogClose label={t("word.closeDetails")} onClick={onClose} />
+        <DialogClose label={t("word.closeDetails")} onClick={requestClose} />
       </div>
 
       <div className="mt-8">
@@ -43,7 +47,7 @@ export function WordDetailsDialog({
 
       {/* Words saved before this field existed have no `notes` property at
           all in storage, not just an empty string. */}
-      <NotesEditor notes={entry.notes ?? ""} onSave={onSaveNotes} />
+      <NotesEditor notes={entry.notes ?? ""} onSave={onSaveNotes} onDirtyChange={setDirty} />
 
       <div className="mt-8 flex justify-end border-t pt-6" style={{ borderColor: "var(--border)" }}>
         <button type="button" onClick={onDelete} className="danger-button">
@@ -65,9 +69,11 @@ export function WordDetailsDialog({
 function NotesEditor({
   notes,
   onSave,
+  onDirtyChange,
 }: {
   notes: string;
   onSave: (notes: string) => Promise<void>;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(notes);
@@ -84,6 +90,7 @@ function NotesEditor({
       await onSave(trimmed);
       setDraft(trimmed);
       setSavedValue(trimmed);
+      onDirtyChange(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("word.notesSaveError"));
     } finally {
@@ -104,6 +111,7 @@ function NotesEditor({
         value={draft}
         onChange={(event) => {
           setDraft(event.target.value);
+          onDirtyChange(event.target.value.trim() !== savedValue);
           setError(null);
         }}
         placeholder={t("word.notesPlaceholder")}

@@ -1,11 +1,12 @@
 "use client";
 
 import { Volume2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { translatePartOfSpeech, useI18n } from "@/lib/i18n";
 import { speakWord } from "@/lib/speech";
 import type { DictionaryEntry } from "@/lib/words";
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="border-t pt-5" style={{ borderColor: "var(--border)" }}>
       <p className="detail-label">{label}</p>
@@ -21,25 +22,31 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
  * translation directly beneath it. Used by both the detail dialog and the
  * add-word review step so a word always looks the same wherever it appears.
  */
-export function WordFacts({ entry }: { entry: DictionaryEntry }) {
+export function WordFacts({
+  entry,
+  meaningEditor,
+}: {
+  entry: DictionaryEntry;
+  meaningEditor?: ReactNode;
+}) {
   const { t } = useI18n();
 
   return (
     <div className="flex flex-col gap-5">
-      {(entry.pronunciation || entry.ipa) && (
+      {entry.word && (
         <div className="flex flex-wrap items-baseline gap-x-10 gap-y-3">
-          {entry.pronunciation && (
+          {entry.word && (
             <div>
               <p className="detail-label">{t("word.pronunciation")}</p>
               <button
                 type="button"
-                onClick={() => speakWord(entry.word)}
+                onClick={() => speakWord(entry.word, entry.audio_url)}
                 className="pronunciation-button mt-2"
                 aria-label={t("word.pronounce", { word: entry.word })}
               >
                 <Volume2 size={15} aria-hidden="true" />
                 <span dir="ltr" className="bidi-isolate">
-                  {entry.pronunciation}
+                  {entry.pronunciation || entry.word}
                 </span>
               </button>
             </div>
@@ -61,35 +68,55 @@ export function WordFacts({ entry }: { entry: DictionaryEntry }) {
       )}
 
       <Row label={t("word.arabic")}>
-        <p
-          lang="ar"
-          dir="rtl"
-          className="bidi-isolate text-ui-start type-meaning"
-          style={{ color: "var(--text)" }}
-        >
-          {entry.meaning_ar}
-        </p>
-      </Row>
-
-      <Row label={t("word.definition")}>
-        <p
-          dir="ltr"
-          className="force-ltr type-body max-w-2xl"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {entry.definition_en}
-        </p>
-        {entry.definition_ar && (
+        {entry.meaning_ar ? (
           <p
             lang="ar"
             dir="rtl"
-            className="bidi-isolate text-ui-start type-body mt-2.5 max-w-2xl"
-            style={{ color: "var(--text-muted)" }}
+            className="bidi-isolate text-ui-start type-meaning"
+            style={{ color: "var(--text)" }}
           >
-            {entry.definition_ar}
+            {entry.meaning_ar}
           </p>
+        ) : (
+          meaningEditor
         )}
       </Row>
+
+      {(entry.definition_en || entry.definition_ar) && (
+        <Row label={t("word.definition")}>
+          {entry.definition_en && (
+            <p
+              dir="ltr"
+              className="force-ltr type-body max-w-2xl"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {entry.definition_en}
+            </p>
+          )}
+          {entry.definition_ar && (
+            <p
+              lang="ar"
+              dir="rtl"
+              className="bidi-isolate text-ui-start type-body mt-2.5 max-w-2xl"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {entry.definition_ar}
+            </p>
+          )}
+        </Row>
+      )}
+
+      {entry.example_sentence && (
+        <Row label={t("word.example")}>
+          <p
+            dir="ltr"
+            className="force-ltr type-body max-w-2xl"
+            style={{ color: "var(--text-muted)" }}
+          >
+            {entry.example_sentence}
+          </p>
+        </Row>
+      )}
     </div>
   );
 }

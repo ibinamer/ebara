@@ -1,6 +1,7 @@
 "use client";
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
+import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
@@ -38,9 +39,20 @@ import { WordRow } from "./components/WordRow";
 import { WordDetailsDialog } from "./components/WordDetailsDialog";
 import { WordFacts, WordHeadline } from "./components/WordFacts";
 import { StatsSkeleton, WordGridSkeleton } from "./components/Skeletons";
-import { useI18n, type Translate } from "@/lib/i18n";
-import { capitalize, normalizeCandidate, sanitizeLiveInput } from "@/lib/speech";
+import { useI18n, type Translate, type TranslationKey } from "@/lib/i18n";
+import {
+  capitalize,
+  normalizeCandidate,
+  normalizeVocabularyInput,
+  sanitizeLiveInput,
+  vocabularyInputKey,
+} from "@/lib/speech";
 import { createVocabularyClient } from "@/lib/supabase";
+import {
+  useVoiceInput,
+  type VoiceAlternative,
+  type VoiceInputErrorCode,
+} from "@/lib/use-voice-input";
 import {
   calculateStats,
   sortWords,
@@ -60,29 +72,33 @@ const ProductDemo = lazy(() =>
 
 type AuthMode = "login" | "signup" | "forgot" | "update";
 type AddStep = "capture" | "review";
+const ARABIC_CHARACTER_PATTERN = /\p{Script=Arabic}/u;
+const DISPLAY_NAME_MAX_LENGTH = 40;
 
-type SpeechAlternative = { transcript: string; confidence: number };
-type SpeechResultEventLike = {
-  results: ArrayLike<
-    ArrayLike<{ transcript: string; confidence: number }> & { isFinal: boolean }
-  >;
-};
-type SpeechErrorEventLike = { error: string };
-type BrowserSpeechRecognition = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  maxAlternatives: number;
-  onstart: (() => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: SpeechErrorEventLike) => void) | null;
-  onresult: ((event: SpeechResultEventLike) => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-type SpeechRecognitionWindow = Window & {
-  SpeechRecognition?: new () => BrowserSpeechRecognition;
-  webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+function normalizeDisplayName(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function getDisplayName(session: Session | null) {
+  const value = session?.user.user_metadata?.display_name;
+  return typeof value === "string" ? normalizeDisplayName(value) : "";
+}
+
+function getDisplayInitial(displayName: string) {
+  return Array.from(displayName)[0]?.toLocaleUpperCase() ?? "";
+}
+
+const VOICE_ERROR_KEYS: Record<VoiceInputErrorCode, TranslationKey> = {
+  unsupported: "add.errVoiceUnsupported",
+  blocked: "add.errMicBlocked",
+  "no-microphone": "add.errVoiceNoMicrophone",
+  "no-speech": "add.errVoiceNoSpeech",
+  unclear: "add.errVoiceUnclear",
+  network: "add.errVoiceNetwork",
+  "service-unavailable": "add.errVoiceService",
+  "language-unsupported": "add.errVoiceLanguage",
+  "rate-limited": "add.errVoiceRateLimited",
+  "start-failed": "add.errVoiceStart",
 };
 
 const DEMO_WORDS: WordRecord[] = [
@@ -94,6 +110,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
     definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
+    audio_url: "",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -108,6 +125,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "The pleasant discovery of something valuable or interesting by chance.",
     definition_ar: "الاكتشاف السار لشيء قيّم أو مثير للاهتمام بالصدفة.",
     pronunciation: "ser-uhn-DIP-uh-tee",
+    audio_url: "",
     ipa: "/ˌser.ənˈdɪp.ə.ti/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -122,6 +140,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "So delicate or precise that it is difficult to notice or describe.",
     definition_ar: "دقيق أو خفي لدرجة يصعب معها ملاحظته أو وصفه.",
     pronunciation: "SUHT-l",
+    audio_url: "",
     ipa: "/ˈsʌt.əl/",
     part_of_speech: "adjective",
     example_sentence: "",
@@ -136,6 +155,7 @@ const DEMO_WORDS: WordRecord[] = [
     definition_en: "Kind, calm, or soft in manner or effect.",
     definition_ar: "لطيف أو هادئ أو ناعم في الطريقة أو التأثير.",
     pronunciation: "JEN-tl",
+    audio_url: "",
     ipa: "/ˈdʒen.təl/",
     part_of_speech: "adjective",
     example_sentence: "",
@@ -151,6 +171,7 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
     definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
+    audio_url: "",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -161,6 +182,7 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
     definition_en: "Continued effort to do or achieve something despite difficulties or failure.",
     definition_ar: "استمرار الجهد لفعل أو تحقيق شيء رغم الصعوبات أو الفشل.",
     pronunciation: "per-suh-VEER-uhns",
+    audio_url: "",
     ipa: "/ˌpɜː.səˈvɪə.rəns/",
     part_of_speech: "noun",
     example_sentence: "",
@@ -171,6 +193,7 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
     definition_en: "Eager to know or learn something.",
     definition_ar: "متحمس لمعرفة أو تعلم شيء ما.",
     pronunciation: "KYOOR-ee-uhs",
+    audio_url: "",
     ipa: "/ˈkjʊə.ri.əs/",
     part_of_speech: "adjective",
     example_sentence: "",
@@ -180,23 +203,25 @@ const DEMO_DICTIONARY: Record<string, DictionaryEntry> = {
 const GUEST_WORDS_STORAGE_KEY = "vocabulary-box:guest-words";
 const GUEST_ACTIVE_STORAGE_KEY = "vocabulary-box:guest-active";
 
-/** One word, or several separated by single spaces — "catch up", "get it". */
-const TERM_PATTERN = /^[a-z]+(?:['-][a-z]+)*(?: [a-z]+(?:['-][a-z]+)*)*$/;
-const MAX_TERM_WORDS = 6;
+const INPUT_PATTERN = /^[a-zA-Z\s,'\-.!?]+$/;
+const MAX_INPUT_WORDS = 12;
+const MAX_INPUT_LENGTH = 160;
 
 function fallbackDictionaryEntry(value: string): DictionaryEntry {
-  const normalized = normalizeCandidate(value);
-  const known = DEMO_DICTIONARY[normalized];
+  const display = normalizeVocabularyInput(value);
+  const dictionaryKey = normalizeCandidate(display);
+  const known = DEMO_DICTIONARY[dictionaryKey];
   if (known) return known;
 
   return {
-    word: normalized,
+    word: display,
     meaning_ar: "معنى تجريبي",
     definition_en: "Dictionary details are available after the live services are connected.",
     definition_ar: "تفاصيل القاموس متاحة بعد الاتصال بالخدمات الفعلية.",
     pronunciation: "",
+    audio_url: "",
     ipa: "",
-    part_of_speech: normalized.includes(" ") ? "phrase" : "word",
+    part_of_speech: display.includes(" ") ? "phrase" : "word",
     example_sentence: "",
   };
 }
@@ -244,6 +269,7 @@ export default function Ebara({
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [words, setWords] = useState<WordRecord[]>(demoMode ? DEMO_WORDS : []);
   const [isLoadingWords, setIsLoadingWords] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
   const [selectedWord, setSelectedWord] = useState<WordRecord | null>(null);
@@ -251,34 +277,78 @@ export default function Ebara({
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [pendingGuestWords, setPendingGuestWords] = useState<WordRecord[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+
+  function persistGuestWords(next: WordRecord[]) {
+    try {
+      window.localStorage.setItem(GUEST_WORDS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      throw new Error(t("guest.storageError"));
+    }
+  }
+
+  async function importGuestWords() {
+    if (!supabase || !session || isImporting) return;
+    setIsImporting(true);
+    try {
+      for (const entry of pendingGuestWords) {
+        // Never copy device identifiers or allow a local record to choose its owner.
+        const { error } = await supabase.from("words").insert({
+          user_id: session.user.id, word: entry.word, meaning_ar: entry.meaning_ar,
+          definition_en: entry.definition_en, definition_ar: entry.definition_ar,
+          pronunciation: entry.pronunciation, audio_url: entry.audio_url,
+          ipa: entry.ipa, part_of_speech: entry.part_of_speech,
+          example_sentence: entry.example_sentence, notes: entry.notes,
+        });
+        if (error && error.code !== "23505") throw error;
+      }
+      window.localStorage.removeItem(GUEST_WORDS_STORAGE_KEY);
+      setPendingGuestWords([]);
+      setToast(t("guest.imported"));
+      await loadWords();
+    } catch {
+      setToast(t("guest.importError"));
+    } finally { setIsImporting(false); }
+  }
 
   const loadWords = useCallback(async () => {
     if (!supabase || demoMode) return;
     setIsLoadingWords(true);
+    setLoadError(false);
     const { data, error } = await supabase
       .from("words")
       .select(
-        "id,user_id,word,meaning_ar,definition_en,definition_ar,pronunciation,ipa,part_of_speech,example_sentence,notes,created_at",
+        "id,user_id,word,meaning_ar,definition_en,definition_ar,pronunciation,audio_url,ipa,part_of_speech,example_sentence,notes,created_at",
       )
       .order("created_at", { ascending: false });
 
     if (error) {
-      setToast(t("toast.loadError"));
+      setLoadError(true);
     } else {
       setWords((data ?? []) as WordRecord[]);
     }
     setIsLoadingWords(false);
-  }, [demoMode, supabase, t]);
+  }, [demoMode, supabase]);
 
   useEffect(() => {
     if (!supabase || demoMode) return;
 
     let active = true;
+    function restorePendingGuestWords() {
+      try {
+        const stored = JSON.parse(window.localStorage.getItem(GUEST_WORDS_STORAGE_KEY) ?? "[]");
+        if (Array.isArray(stored)) setPendingGuestWords(stored.filter((entry) =>
+          entry && typeof entry.word === "string" && typeof entry.meaning_ar === "string",
+        ));
+      } catch { setToast(t("guest.storageError")); }
+    }
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
       setSession(data.session);
       setAuthReady(true);
       if (data.session) {
+        restorePendingGuestWords();
         window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
         setGuestMode(false);
         void loadWords();
@@ -301,6 +371,7 @@ export default function Ebara({
       setAuthReady(true);
       if (event === "PASSWORD_RECOVERY") setAuthMode("update");
       if (nextSession && event === "SIGNED_IN") {
+        restorePendingGuestWords();
         window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
         setGuestMode(false);
         void loadWords();
@@ -311,12 +382,7 @@ export default function Ebara({
       active = false;
       subscription.unsubscribe();
     };
-  }, [demoMode, loadWords, supabase]);
-
-  useEffect(() => {
-    if (demoMode || session || !guestMode) return;
-    window.localStorage.setItem(GUEST_WORDS_STORAGE_KEY, JSON.stringify(words));
-  }, [demoMode, guestMode, session, words]);
+  }, [demoMode, loadWords, supabase, t]);
 
   useEffect(() => {
     if (!toast) return;
@@ -341,6 +407,8 @@ export default function Ebara({
     return sortWords(result, sortOrder);
   }, [searchQuery, sortOrder, words]);
 
+  const displayName = getDisplayName(session);
+
   async function handleLogout() {
     if (guestMode) {
       window.localStorage.removeItem(GUEST_ACTIVE_STORAGE_KEY);
@@ -356,6 +424,71 @@ export default function Ebara({
     setWords([]);
   }
 
+  function handleExportData() {
+    const exportPayload = {
+      service: "EBARA",
+      exported_at: new Date().toISOString(),
+      account_email: session?.user.email ?? null,
+      display_name: displayName || null,
+      storage: guestMode ? "this device" : "Supabase account",
+      words: words.map((entry) =>
+        Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "user_id")),
+      ),
+    };
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `ebara-vocabulary-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  function handleClearGuest() {
+    window.localStorage.removeItem(GUEST_WORDS_STORAGE_KEY);
+    setWords([]);
+    setSelectedWord(null);
+    setWordToDelete(null);
+    setSettingsOpen(false);
+  }
+
+  async function handleDeleteAccount() {
+    if (!supabase || !session) throw new Error("A signed-in account is required.");
+
+    const { error } = await supabase.functions.invoke("delete-account", {
+      body: { confirmation: "DELETE_MY_ACCOUNT" },
+    });
+    if (error) throw error;
+
+    await supabase.auth.signOut({ scope: "local" });
+    setWords([]);
+    setSelectedWord(null);
+    setWordToDelete(null);
+    setSettingsOpen(false);
+  }
+
+  async function handleUpdateDisplayName(nextDisplayName: string) {
+    if (!supabase || !session) throw new Error("A signed-in account is required.");
+
+    const normalized = normalizeDisplayName(nextDisplayName);
+    if (normalized.length < 2 || normalized.length > DISPLAY_NAME_MAX_LENGTH) {
+      throw new Error(t("settings.displayNameError"));
+    }
+
+    const { data, error } = await supabase.auth.updateUser({
+      data: { display_name: normalized },
+    });
+    if (error) throw error;
+
+    setSession((current) =>
+      current && data.user ? { ...current, user: data.user } : current,
+    );
+  }
+
   function continueAsGuest() {
     let storedWords: WordRecord[] = [];
     try {
@@ -364,13 +497,19 @@ export default function Ebara({
     } catch {
       storedWords = [];
     }
-    window.localStorage.setItem(GUEST_ACTIVE_STORAGE_KEY, "true");
+    try { window.localStorage.setItem(GUEST_ACTIVE_STORAGE_KEY, "true"); }
+    catch { setToast(t("guest.storageError")); return; }
     setWords(storedWords);
     setGuestMode(true);
   }
 
   async function handleSave(dictionaryEntry: DictionaryEntry) {
-    if (words.some((entry) => entry.word.toLowerCase() === dictionaryEntry.word.toLowerCase())) {
+    if (
+      words.some(
+        (entry) =>
+          vocabularyInputKey(entry.word) === vocabularyInputKey(dictionaryEntry.word),
+      )
+    ) {
       throw new Error(t("add.errDuplicate"));
     }
 
@@ -382,7 +521,9 @@ export default function Ebara({
         user_id: guestMode ? "guest-user" : "demo-user",
         created_at: new Date().toISOString(),
       };
-      setWords((current) => [previewWord, ...current]);
+      const next = [previewWord, ...words];
+      if (guestMode) persistGuestWords(next);
+      setWords(next);
       setToast(t("toast.saved", { word: capitalize(previewWord.word) }));
       return;
     }
@@ -396,6 +537,7 @@ export default function Ebara({
         definition_en: dictionaryEntry.definition_en,
         definition_ar: dictionaryEntry.definition_ar,
         pronunciation: dictionaryEntry.pronunciation,
+        audio_url: dictionaryEntry.audio_url,
         ipa: dictionaryEntry.ipa,
         part_of_speech: dictionaryEntry.part_of_speech,
         example_sentence: dictionaryEntry.example_sentence,
@@ -415,6 +557,7 @@ export default function Ebara({
 
   async function handleUpdateNotes(id: string, notes: string) {
     const trimmed = notes.trim();
+    if (guestMode) persistGuestWords(words.map((entry) => entry.id === id ? { ...entry, notes: trimmed } : entry));
 
     if (!demoMode && supabase && session) {
       const { error } = await supabase.from("words").update({ notes: trimmed }).eq("id", id);
@@ -432,6 +575,10 @@ export default function Ebara({
   async function handleDelete() {
     if (!wordToDelete) return;
     const target = wordToDelete;
+    if (guestMode) {
+      try { persistGuestWords(words.filter((entry) => entry.id !== target.id)); }
+      catch { setToast(t("guest.storageError")); return; }
+    }
 
     if (!demoMode && supabase && session) {
       const { error } = await supabase.from("words").delete().eq("id", target.id);
@@ -449,7 +596,7 @@ export default function Ebara({
 
   if (!authReady) return <LoadingScreen />;
 
-  if (!demoMode && !session && !guestMode) {
+  if (!demoMode && (authMode === "update" || (!session && !guestMode))) {
     return (
       <AuthScreen
         client={supabase}
@@ -475,14 +622,20 @@ export default function Ebara({
             )}
           </div>
 
-          <div className="flex items-center gap-0.5">
-            <span
-              className="badge me-2 hidden not-italic sm:inline"
-              style={{ color: "var(--text-faint)" }}
-            >
-              {session?.user.email ??
-                (guestMode ? t("header.guestAccount") : t("header.previewAccount"))}
-            </span>
+          <div className="flex min-w-0 items-center gap-0.5">
+            <div className="account-signature me-1.5" aria-label={t("header.accountName")}>
+              <span className="account-avatar" aria-hidden="true">
+                {displayName
+                  ? getDisplayInitial(displayName)
+                  : guestMode
+                    ? t("header.guestInitial")
+                    : t("header.previewInitial")}
+              </span>
+              <span className="account-display-name">
+                {displayName ||
+                  (guestMode ? t("header.guestAccount") : t("header.previewAccount"))}
+              </span>
+            </div>
 
             <button
               type="button"
@@ -508,6 +661,14 @@ export default function Ebara({
       </header>
 
       <section className="mx-auto max-w-[64rem] px-5 pb-28 pt-12 sm:px-8 sm:pt-16">
+        {session && pendingGuestWords.length > 0 && (
+          <div className="mb-6" role="status">
+            <button className="secondary-button" disabled={isImporting} onClick={() => void importGuestWords()}>
+              {isImporting && <LoaderCircle className="animate-spin" size={16} />}
+              {t("guest.import")} ({pendingGuestWords.length})
+            </button>
+          </div>
+        )}
         {/*
           The page opens on the collection itself rather than a title block.
           The heading names the section, the colophon captions it, and the two
@@ -565,7 +726,12 @@ export default function Ebara({
         )}
 
         <div className="list-panel mt-7">
-          {isLoadingWords ? (
+          {loadError ? (
+            <div role="alert" className="p-8 text-center">
+              <p>{t("toast.loadError")}</p>
+              <button className="primary-button mt-4" onClick={() => void loadWords()}>{t("common.retry")}</button>
+            </div>
+          ) : isLoadingWords ? (
             <WordGridSkeleton />
           ) : filteredWords.length ? (
             <ul className="glossary">
@@ -590,12 +756,16 @@ export default function Ebara({
       </section>
 
       <footer
-        className="type-caption mx-auto max-w-[1180px] border-t px-4 py-7 sm:px-8"
+        className="type-caption mx-auto flex max-w-[1180px] flex-col gap-4 border-t px-4 py-7 sm:flex-row sm:items-start sm:justify-between sm:px-8"
         style={{ borderColor: "var(--border)", color: "var(--text-faint)" }}
       >
         <p className="max-w-2xl">
           <FooterCredit t={t} />
         </p>
+        <nav className="flex shrink-0 gap-4">
+          <Link className="link-button" href="/terms">{t("legal.terms")}</Link>
+          <Link className="link-button" href="/privacy">{t("legal.privacy")}</Link>
+        </nav>
       </footer>
 
       {addOpen && (
@@ -629,8 +799,13 @@ export default function Ebara({
         <SettingsDialog
           onClose={() => setSettingsOpen(false)}
           accountEmail={session?.user.email}
+          displayName={displayName}
           guestMode={guestMode}
           demoMode={demoMode}
+          onUpdateDisplayName={handleUpdateDisplayName}
+          onExport={handleExportData}
+          onClearGuest={handleClearGuest}
+          onDeleteAccount={handleDeleteAccount}
         />
       )}
 
@@ -721,10 +896,12 @@ function AuthScreen({
   onContinueGuest: () => void;
 }) {
   const { t } = useI18n();
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -740,6 +917,7 @@ function AuthScreen({
     setMessage(null);
     setPassword("");
     setConfirmPassword("");
+    setAcceptedTerms(false);
     onModeChange(nextMode);
   }
 
@@ -754,7 +932,22 @@ function AuthScreen({
         const { error: signInError } = await client.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
       } else if (mode === "signup") {
-        const { error: signUpError } = await client.auth.signUp({ email, password });
+        if (!acceptedTerms) throw new Error(t("auth.errAcceptTerms"));
+        const normalizedDisplayName = normalizeDisplayName(displayName);
+        if (
+          normalizedDisplayName.length < 2 ||
+          normalizedDisplayName.length > DISPLAY_NAME_MAX_LENGTH
+        ) {
+          throw new Error(t("auth.errDisplayName"));
+        }
+        const { error: signUpError } = await client.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: { display_name: normalizedDisplayName },
+          },
+        });
         if (signUpError) throw signUpError;
         setMessage(t("auth.checkInbox"));
       } else if (mode === "forgot") {
@@ -769,6 +962,8 @@ function AuthScreen({
         const { error: updateError } = await client.auth.updateUser({ password });
         if (updateError) throw updateError;
         setMessage(t("auth.passwordUpdated"));
+        window.history.replaceState(null, "", window.location.pathname);
+        onModeChange("login");
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("auth.errGeneric"));
@@ -843,6 +1038,25 @@ function AuthScreen({
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
+              {mode === "signup" && (
+                <label className="block">
+                  <span className="field-label">{t("auth.displayName")}</span>
+                  <input
+                    type="text"
+                    dir="auto"
+                    className="field-input"
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    placeholder={t("auth.displayNamePlaceholder")}
+                    autoComplete="name"
+                    minLength={2}
+                    maxLength={DISPLAY_NAME_MAX_LENGTH}
+                    required
+                  />
+                  <span className="field-hint">{t("auth.displayNameHint")}</span>
+                </label>
+              )}
+
               {mode !== "update" && (
                 <label className="block">
                   <span className="field-label">{t("auth.email")}</span>
@@ -901,6 +1115,29 @@ function AuthScreen({
                     {t("auth.forgotLink")}
                   </button>
                 </div>
+              )}
+
+              {mode === "signup" && (
+                <label className="flex cursor-pointer items-start gap-2.5 type-caption" style={{ color: "var(--text-muted)" }}>
+                  <input
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(event) => setAcceptedTerms(event.target.checked)}
+                    className="mt-1 size-4 shrink-0"
+                    style={{ accentColor: "var(--accent)" }}
+                    required
+                  />
+                  <span>
+                    {t("auth.agreePrefix")} {" "}
+                    <Link className="link-button" href="/terms" target="_blank">
+                      {t("legal.terms")}
+                    </Link>{" "}
+                    {t("auth.agreeAnd")} {" "}
+                    <Link className="link-button" href="/privacy" target="_blank">
+                      {t("legal.privacy")}
+                    </Link>
+                  </span>
+                </label>
               )}
 
               {error && (
@@ -966,6 +1203,12 @@ function AuthScreen({
                 {t("auth.backToLogin")}
               </button>
             )}
+
+            <p className="type-caption mt-6 text-center" style={{ color: "var(--text-faint)" }}>
+              <Link className="link-button" href="/terms">{t("legal.terms")}</Link>
+              <span aria-hidden="true"> · </span>
+              <Link className="link-button" href="/privacy">{t("legal.privacy")}</Link>
+            </p>
           </div>
         </div>
       </div>
@@ -989,44 +1232,68 @@ function AddWordDialog({
   const { t } = useI18n();
   const [step, setStep] = useState<AddStep>("capture");
   const [draft, setDraft] = useState("");
-  const [voiceAlternatives, setVoiceAlternatives] = useState<SpeechAlternative[]>([]);
+  const [voiceAlternatives, setVoiceAlternatives] = useState<VoiceAlternative[]>([]);
+  const [vocabularySuggestions, setVocabularySuggestions] = useState<string[]>([]);
   const [dictionaryEntry, setDictionaryEntry] = useState<DictionaryEntry | null>(null);
-  const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
-  const listeningTimeoutRef = useRef<number | null>(null);
+  const lookupController = useRef<AbortController | null>(null);
+  useEffect(() => () => lookupController.current?.abort(), []);
+  function cancelLookup() {
+    lookupController.current?.abort();
+    setIsProcessing(false);
+  }
+
+  const handleVoiceAlternatives = useCallback((alternatives: VoiceAlternative[]) => {
+    setError(null);
+    setVoiceAlternatives(alternatives);
+    if (alternatives[0]) setDraft(alternatives[0].transcript);
+  }, []);
+
+  const handleVoiceError = useCallback(
+    (code: VoiceInputErrorCode) => setError(t(VOICE_ERROR_KEYS[code])),
+    [t],
+  );
+
+  const {
+    status: voiceStatus,
+    start: startListening,
+    stop: stopListening,
+    cancel: cancelListening,
+  } = useVoiceInput({
+    accessToken: session?.access_token,
+    onAlternatives: handleVoiceAlternatives,
+    onError: handleVoiceError,
+  });
+  const isListening = voiceStatus === "listening";
+  const isVoiceBusy = voiceStatus !== "idle";
 
   useEffect(() => {
     const timeout = window.setTimeout(() => inputRef.current?.focus(), 80);
     return () => window.clearTimeout(timeout);
   }, []);
 
-  // Always release the microphone and pending timer when the dialog goes away.
-  useEffect(() => {
-    return () => {
-      recognitionRef.current?.stop();
-      recognitionRef.current = null;
-      if (listeningTimeoutRef.current) window.clearTimeout(listeningTimeoutRef.current);
-    };
-  }, []);
-
-  async function lookupWord(candidate: string) {
-    const normalized = normalizeCandidate(candidate);
+  async function lookupWord(
+    candidate: string,
+    options?: { exampleSentence?: string },
+  ) {
+    const normalized = normalizeVocabularyInput(candidate);
+    const wordCount = normalized.match(/[a-z]+(?:['-][a-z]+)*/gi)?.length ?? 0;
     if (
       !normalized ||
-      normalized.length > 80 ||
-      normalized.split(" ").length > MAX_TERM_WORDS ||
-      !TERM_PATTERN.test(normalized)
+      normalized.length > MAX_INPUT_LENGTH ||
+      wordCount === 0 ||
+      wordCount > MAX_INPUT_WORDS ||
+      !INPUT_PATTERN.test(normalized)
     ) {
       setError(t("add.errOneWord"));
       return;
     }
 
     const existingWord = savedWords.find(
-      (entry) => normalizeCandidate(entry.word) === normalized,
+      (entry) => vocabularyInputKey(entry.word) === vocabularyInputKey(normalized),
     );
     if (existingWord) {
       setError(t("add.errDuplicate"));
@@ -1035,13 +1302,23 @@ function AddWordDialog({
 
     setError(null);
     setIsProcessing(true);
+    const controller = new AbortController();
+    lookupController.current?.abort();
+    lookupController.current = controller;
+    let timedOut = false;
+    const lookupTimeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 8000);
     try {
       let result: DictionaryEntry;
       if (demoMode) {
         await new Promise((resolve) => window.setTimeout(resolve, 650));
         result = fallbackDictionaryEntry(normalized);
+        setVocabularySuggestions([]);
       } else {
         const response = await fetch("/api/dictionary", {
+          signal: controller.signal,
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1050,89 +1327,70 @@ function AddWordDialog({
           body: JSON.stringify({ word: normalized }),
         });
         const payload = (await response.json()) as DictionaryEntry & {
-          error?: string | { message?: string };
+          error?: string | { code?: string; message?: string };
           message?: string;
           data?: DictionaryEntry;
+          needs_arabic_meaning?: boolean;
+          entry_kind?: "word" | "phrase" | "expression" | "sentence";
+          suggestions?: string[];
+          vocabulary_suggestions?: string[];
         };
         if (!response.ok) {
-          const apiMessage =
-            typeof payload.error === "string"
-              ? payload.error
-              : payload.error?.message ?? payload.message;
-          throw new Error(apiMessage || t("add.errNotFound"));
+          const apiCode = typeof payload.error === "object" ? payload.error?.code : null;
+          if (apiCode === "DICTIONARY_NOT_FOUND") {
+            setVoiceAlternatives(
+              (payload.suggestions ?? []).map((transcript) => ({
+                transcript,
+                confidence: 0,
+              })),
+            );
+            throw new Error(t("add.errNotFound"));
+          }
+          if (apiCode === "RATE_LIMITED" || apiCode?.endsWith("_RATE_LIMITED")) {
+            throw new Error(t("add.errRateLimited"));
+          }
+          if (apiCode === "AUTH_INVALID" || apiCode === "AUTH_UNAVAILABLE") {
+            throw new Error(t("auth.sessionExpired"));
+          }
+          if (apiCode?.startsWith("DICTIONARY_") || apiCode?.startsWith("WIKTIONARY_")) {
+            throw new Error(t("add.errDictionaryUnavailable"));
+          }
+          throw new Error(t("add.errDictionaryUnavailable"));
         }
         result = payload.data ?? payload;
+        setVocabularySuggestions(payload.vocabulary_suggestions ?? []);
       }
 
-      setDraft(result.word);
-      setDictionaryEntry(result);
+      if (controller.signal.aborted) return;
+      const nextEntry = {
+        ...result,
+        example_sentence: options?.exampleSentence ?? result.example_sentence,
+      };
+      setDraft(nextEntry.word);
+      setDictionaryEntry(nextEntry);
       setStep("review");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("add.errNotFound"));
+      if (controller.signal.aborted && !timedOut) return;
+      setError(timedOut || (caught instanceof DOMException && (caught.name === "TimeoutError" || caught.name === "AbortError"))
+        ? t("add.errDictionaryUnavailable")
+        : caught instanceof Error ? caught.message : t("add.errDictionaryUnavailable"));
     } finally {
-      setIsProcessing(false);
+      window.clearTimeout(lookupTimeout);
+      if (lookupController.current === controller) setIsProcessing(false);
     }
-  }
-
-  function startListening() {
-    setError(null);
-    const browserWindow = window as SpeechRecognitionWindow;
-    const SpeechRecognitionAPI =
-      browserWindow.SpeechRecognition ?? browserWindow.webkitSpeechRecognition;
-
-    if (!SpeechRecognitionAPI) {
-      setError(t("add.errVoiceUnsupported"));
-      return;
-    }
-
-    const recognition = new SpeechRecognitionAPI();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.maxAlternatives = 5;
-    recognition.onstart = () => {
-      setIsListening(true);
-      listeningTimeoutRef.current = window.setTimeout(() => recognition.stop(), 9_000);
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-      if (listeningTimeoutRef.current) window.clearTimeout(listeningTimeoutRef.current);
-      listeningTimeoutRef.current = null;
-    };
-    recognition.onerror = (event) => {
-      setIsListening(false);
-      setError(
-        event.error === "not-allowed" ? t("add.errMicBlocked") : t("add.errVoiceUnclear"),
-      );
-    };
-    recognition.onresult = (event) => {
-      const finalResult = event.results[event.results.length - 1];
-      const alternatives = Array.from({ length: finalResult.length }, (_, index) => {
-        const item = finalResult[index];
-        return {
-          transcript: normalizeCandidate(item.transcript),
-          confidence: item.confidence,
-        };
-      }).filter((item) => item.transcript);
-
-      const unique = alternatives.filter(
-        (item, index, array) =>
-          array.findIndex((candidate) => candidate.transcript === item.transcript) === index,
-      );
-      setVoiceAlternatives(unique);
-      if (unique[0]) setDraft(unique[0].transcript);
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
   }
 
   async function saveWord() {
     if (!dictionaryEntry) return;
+    const meaning = dictionaryEntry.meaning_ar.trim();
+    if (!meaning || !ARABIC_CHARACTER_PATTERN.test(meaning)) {
+      setError(t("add.errArabicMeaning"));
+      return;
+    }
     setIsSaving(true);
     setError(null);
     try {
-      await onSave(dictionaryEntry);
+      await onSave({ ...dictionaryEntry, meaning_ar: meaning });
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("add.errSaveFailed"));
@@ -1204,9 +1462,15 @@ function AddWordDialog({
             />
             <button
               type="button"
-              onClick={isListening ? () => recognitionRef.current?.stop() : startListening}
+              onClick={() => {
+                setError(null);
+                if (voiceStatus === "idle") void startListening();
+                else if (voiceStatus === "listening") stopListening();
+                else cancelListening();
+              }}
               className="voice-button"
-              aria-label={isListening ? t("add.stopVoice") : t("add.voice")}
+              aria-label={isVoiceBusy ? t("add.stopVoice") : t("add.voice")}
+              disabled={voiceStatus === "processing"}
             >
               {isListening ? (
                 <span className="voice-pulse" aria-hidden="true" />
@@ -1216,7 +1480,7 @@ function AddWordDialog({
             </button>
           </div>
 
-          {isListening && (
+          {isVoiceBusy && (
             <div
               className="mt-3 flex items-center gap-2 text-sm"
               style={{ color: "var(--accent-text)" }}
@@ -1226,7 +1490,11 @@ function AddWordDialog({
                 className="size-1.5 animate-pulse rounded-full"
                 style={{ background: "currentColor" }}
               />
-              {t("add.listening")}
+              {voiceStatus === "requesting"
+                ? t("add.requestingMic")
+                : voiceStatus === "processing"
+                  ? t("add.processingVoice")
+                  : t("add.listening")}
             </div>
           )}
 
@@ -1256,12 +1524,13 @@ function AddWordDialog({
 
           {error && <DialogError message={error} />}
 
-          <div className="mt-7 flex justify-end">
+          <div className="mt-7 flex justify-end gap-3">
+            {isProcessing && <button type="button" className="secondary-button" onClick={cancelLookup}>{t("common.cancel")}</button>}
             <button
               type="button"
               onClick={() => void lookupWord(draft)}
               className="primary-button min-w-36"
-              disabled={!draft.trim() || isProcessing || isListening}
+              disabled={!draft.trim() || isProcessing || isVoiceBusy}
             >
               {isProcessing ? (
                 <LoaderCircle size={17} className="animate-spin" aria-hidden="true" />
@@ -1274,7 +1543,73 @@ function AddWordDialog({
         </div>
       ) : dictionaryEntry ? (
         <div className="mt-7">
-          <WordFacts entry={dictionaryEntry} />
+          <WordFacts
+            entry={dictionaryEntry}
+            meaningEditor={
+              <div className="max-w-xl">
+                <input
+                  type="text"
+                  lang="ar"
+                  dir="rtl"
+                  value={dictionaryEntry.meaning_ar}
+                  onChange={(event) => {
+                    setDictionaryEntry((current) =>
+                      current
+                        ? { ...current, meaning_ar: event.target.value.slice(0, 512) }
+                        : current,
+                    );
+                    setError(null);
+                  }}
+                  className="manual-meaning-input"
+                  placeholder={t("add.manualMeaningPlaceholder")}
+                  aria-label={t("add.manualMeaningLabel")}
+                  autoComplete="off"
+                />
+                <p className="type-caption mt-2.5" style={{ color: "var(--text-muted)" }}>
+                  {t("add.manualMeaningHint")}
+                </p>
+              </div>
+            }
+          />
+
+          {vocabularySuggestions.length > 0 && (
+            <div
+              className="mt-6 rounded-2xl border p-4"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface-2)",
+              }}
+            >
+              <p className="type-body font-semibold" style={{ color: "var(--text)" }}>
+                {t("add.sentenceSuggestionTitle")}
+              </p>
+              <p className="type-caption mt-1.5" style={{ color: "var(--text-muted)" }}>
+                {t("add.sentenceSuggestionHint")}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {vocabularySuggestions.map((suggestion, index) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() =>
+                      void lookupWord(suggestion, {
+                        exampleSentence: dictionaryEntry.word,
+                      })
+                    }
+                    className="chip"
+                    disabled={isProcessing || isSaving}
+                  >
+                    <span dir="ltr" className="bidi-isolate">
+                      {suggestion}
+                    </span>
+                    {index === 0 && (
+                      <span className="chip-count">{t("add.recommended")}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {error && <DialogError message={error} />}
 
@@ -1301,7 +1636,11 @@ function AddWordDialog({
               ) : (
                 <Plus size={17} aria-hidden="true" />
               )}
-              {isSaving ? t("add.saving") : t("add.save")}
+              {isSaving
+                ? t("add.saving")
+                : dictionaryEntry.part_of_speech === "sentence"
+                  ? t("add.saveSentence")
+                  : t("add.save")}
             </button>
           </div>
         </div>

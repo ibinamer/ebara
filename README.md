@@ -15,6 +15,8 @@ games, streaks, chat, or other learning-platform features.
 - Typed input or short browser voice input
 - English definitions, pronunciation, IPA, part of speech, and an available
   example from the Free Dictionary API
+- Free Dictionary API pronunciation recordings when available, with the best
+  English voice installed on the listener's device as the automatic fallback
 - Arabic dictionary meanings from Wiktionary through the MediaWiki Action API
 - Permanent Supabase storage for every completed word record
 - Full English and Arabic interface with automatic LTR/RTL switching
@@ -34,7 +36,8 @@ games, streaks, chat, or other learning-platform features.
 | Styling | Tailwind CSS v4 plus a token layer in `app/globals.css` |
 | Auth & data | Supabase Auth and PostgreSQL with row-level security |
 | Build tooling | Vite 8, Wrangler |
-| Dictionary sources | Free Dictionary API, Wiktionary via the MediaWiki Action API |
+| Dictionary sources | Free Dictionary API, Wiktionary via the MediaWiki Action API, Datamuse part-of-speech popularity metadata |
+| Arabic dictionary & translation | Azure Translator Dictionary Lookup and Text Translation (official, optional), Wiktionary, and a best-effort MyMemory fallback |
 | Fonts | Playfair Display, IBM Plex Sans Arabic, IBM Plex Mono — self-hosted |
 
 No component library, no state-management library, no icon font. The only
@@ -71,13 +74,20 @@ records — useful for reviewing the interface, but nothing is saved.
 
 ## Environment variables
 
-Both are public, browser-exposed values. There are no server-side secrets in
-this project, and no service-role key is used anywhere.
+The four `NEXT_PUBLIC_` values are public and browser-exposed. The account
+deletion Edge Function uses Supabase-managed server secrets; its service-role
+key is never placed in this repository or exposed to the browser.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | For accounts | Supabase project URL, e.g. `https://xxxx.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | For accounts | Supabase anon/publishable key |
+| `NEXT_PUBLIC_LEGAL_OPERATOR_NAME` | Public launch | Legal name of the service operator shown in the legal pages |
+| `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | Public launch | Monitored address for privacy and support requests |
+| `AZURE_TRANSLATOR_KEY` | Optional | Server-only Azure Translator key; never exposed to the browser |
+| `AZURE_TRANSLATOR_REGION` | Optional | Azure resource region; required for regional or multi-service resources |
+| `AZURE_SPEECH_KEY` | Optional | Server-only Azure Speech key for the microphone fallback |
+| `AZURE_SPEECH_REGION` | Optional | Region of the Azure Speech resource, e.g. `qatarcentral` |
 
 `SUPABASE_URL` and `SUPABASE_ANON_KEY` are accepted as fallbacks for hosts that
 do not forward `NEXT_PUBLIC_` variables.
@@ -85,16 +95,66 @@ do not forward `NEXT_PUBLIC_` variables.
 Find both under **Project Settings → API** in the Supabase dashboard. Never
 commit `.env.local`; `.gitignore` already excludes it.
 
+When the Azure key is configured, Sites D1 tracks the number of Unicode
+characters sent to Azure for each UTC calendar month. EBARA records a warning
+at **1,800,000** characters and atomically stops sending text to Azure at
+**1,900,000** characters, leaving a safety buffer below the F0 allowance. It
+then continues through Wiktionary, MyMemory, or the existing manual-Arabic
+fallback instead of failing the word lookup. The meter deliberately counts a
+reserved request even if Azure later times out, because the text was already
+sent and may still be metered.
+
 ## Database setup
 
 1. Create a Supabase project.
-2. Open the SQL editor and run
-   `supabase/migrations/20260801190000_initial_vocabulary_box.sql`. It creates
+2. Apply every file in `supabase/migrations/` in filename order. They create
    the `profiles` and `words` tables, owner-scoped row-level-security policies,
-   and the search and duplicate-guard indexes.
+   search and duplicate-guard indexes, Arabic definitions, and personal notes.
 3. Under **Authentication → URL Configuration**, add
    `http://localhost:3000` and your deployed URL to the redirect allow list, so
    email confirmation and password recovery links return to the app.
+4. Deploy `supabase/functions/delete-account` with JWT verification enabled.
+   Supabase provides `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
+   `SUPABASE_SERVICE_ROLE_KEY` to the function runtime. Never copy the service
+   role key into a `NEXT_PUBLIC_` variable.
+
+The operational Azure-usage meter is separate from Supabase user data. Sites
+creates its private D1 binding from the hosting manifest; the matching schema is
+in `db/schema.ts` and `drizzle/0001_azure_translation_usage.sql`.
+
+## Public launch checklist
+
+The code includes private account storage, export, account deletion, bilingual
+Terms and Privacy pages, and explicit acceptance during sign-up. Before sharing
+the service with the public, the operator must also complete the hosted-service
+configuration below:
+
+1. **Email delivery:** configure a custom SMTP provider in Supabase Auth. The
+   default sender is intended for development and cannot reliably serve public
+   sign-ups, email confirmation, and password recovery.
+2. **URLs:** set the production Site URL and exact redirect allow-list entries
+   in Supabase Auth. Test confirmation and recovery links on the production
+   domain, not only localhost.
+3. **Abuse protection:** review Auth rate limits and enable CAPTCHA for sign-up,
+   login, and password recovery before advertising the service broadly. Enable
+   leaked-password protection under Auth password security as well; the current
+   project advisor reports that protection as disabled.
+4. **Legal identity:** set a real operator name and a monitored privacy email in
+   the two legal environment variables. The included legal text is a practical
+   launch draft, not legal advice; have it reviewed for the intended audience.
+5. **International processing:** the current Supabase database is in Tokyo,
+   Japan. A Saudi public launch should document and assess the applicable
+   safeguards for transferring personal data outside the Kingdom before launch.
+6. **Reliability:** choose a Supabase plan and backup policy appropriate for the
+   number of users. Free projects can pause after inactivity and should not be
+   treated as a guaranteed production service.
+7. **End-to-end QA:** create a test account through the public URL, confirm its
+   email, add and edit a word, log out and back in on another device, export the
+   library, reset the password, and finally delete the test account.
+
+Official references: the [Supabase production checklist](https://supabase.com/docs/guides/deployment/going-into-prod),
+[custom SMTP guide](https://supabase.com/docs/guides/auth/auth-smtp), and the
+[Saudi Personal Data Protection Law implementing regulations](https://www.uqn.gov.sa/details?p=23595).
 
 ## Scripts
 
@@ -189,11 +249,11 @@ in `app/globals.css`.
 
 ## Words and phrases
 
-A saved entry can be a single word or a short set phrase — "catch up", "get it",
-"look forward to" — up to six words. Anything spanning more than one word is
-filed under the `phrase` type, so phrasal verbs and idioms collect in one
-browsable filter instead of scattering across the noun and verb buckets their
-head word happens to carry.
+A saved entry can be a single word, a set phrase such as "catch up", or one
+short English sentence up to 12 words and 160 characters. Dictionary-backed
+phrases keep the `phrase` type; inputs without a published dictionary entry are
+stored honestly as `expression` or `sentence` records with no invented
+definition, IPA, or pronunciation.
 
 The Free Dictionary API is organised around single words and has no entry for
 some ordinary phrases ("get it" returns 404 there). When that happens the server
@@ -203,29 +263,55 @@ generated text.
 
 ## Dictionary lookup and save flow
 
-1. The browser normalizes the recognized or typed English word and checks the
-   owner's already-loaded collection first.
+1. The browser preserves the recognized or typed English casing and meaningful
+   punctuation, then checks the owner's already-loaded collection first.
 2. The authenticated server route repeats an owner-scoped Supabase lookup. If
    the word is already saved, it returns that stored record and makes no
    external dictionary request. This also covers stale tabs and other devices.
-3. For a genuinely new word, the server retrieves the primary English entry
-   from `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`. The first
-   primary meaning and definition are treated as the most common result.
-4. The server retrieves a matching Arabic dictionary meaning from English
-   Wiktionary through `https://en.wiktionary.org/w/api.php`.
-5. The completed record is inserted once into the owner's Supabase collection.
+3. An obvious short sentence goes directly to Azure in one request. EBARA
+   returns its Arabic translation and suggests useful content words that the
+   learner can save, keeping the original sentence as their example.
+4. For a genuinely new word or ambiguous phrase, the server retrieves the English entries from
+   `https://api.dictionaryapi.dev/api/v2/entries/en/<word>`. Datamuse ranks
+   parts of speech by popularity in Google Books Ngrams, and the server selects
+   the first dictionary definition inside the most popular category. This keeps
+   an everyday adjective such as `high` from opening on its rare noun sense.
+5. When Azure is configured, Dictionary Lookup selects a short Arabic meaning
+   that matches the English entry's part of speech. Wiktionary remains the
+   curated fallback through `https://en.wiktionary.org/w/api.php`.
+6. Azure Text Translation translates the selected English definition into
+   Arabic. MyMemory is attempted only if Azure is unavailable or the protected
+   monthly cap has been reached.
+7. If neither dictionary has a published multiword entry, Azure translates it
+   directly as an expression instead of returning a misleading dictionary
+   error. Missing single words still receive spelling suggestions first.
+8. When the hosting runtime exposes a shared cache, completed public dictionary
+   records are cached for 30 days across users. Owner-scoped Supabase records
+   remain the durable cache on every supported runtime.
+9. The completed record is inserted once into the owner's Supabase collection.
    A case-insensitive unique database index is the race-safe duplicate guard.
 
 No generated fallback is substituted when a word or Arabic dictionary meaning
 cannot be found. The user receives a clear error and can try another spelling.
-The dictionary endpoints used by the server do not require project API keys.
+The English dictionary, Wiktionary, and Datamuse endpoints currently need no
+project API keys. Server-only `AZURE_TRANSLATOR_KEY` and
+`AZURE_TRANSLATOR_REGION` values enable Azure's sense-aware Dictionary Lookup
+and definition translation. Wiktionary remains the curated headword fallback,
+and MyMemory is attempted only after those sources. If only the optional Arabic
+definition translation is unavailable, the core English definition and short
+Arabic meaning still save instead of failing the entire lookup.
 
 ## Voice privacy
 
 Voice capture uses the browser's speech-recognition support to turn a short
 utterance into English text. Availability and suggested spellings depend on the
-browser and operating system. EBARA does not write voice recordings to
-Supabase; only the selected word and its completed dictionary record are stored.
+browser and operating system. When `AZURE_SPEECH_KEY` is configured, Safari,
+browsers without Web Speech support, and recoverable browser-service failures
+use Azure Speech as a short-lived fallback. Audio is limited to ten seconds,
+processed transiently, and never written to Supabase or application logs. Sites
+D1 stores only the number of milliseconds reserved each UTC month and stops the
+fallback at 4.5 hours, below Azure Speech F0's five-hour allowance. Only the
+recognized text continues into the existing dictionary flow.
 
 ## Preview mode
 
